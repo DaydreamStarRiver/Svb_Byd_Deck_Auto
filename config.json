@@ -1,0 +1,143 @@
+{
+    "adb_port": 16384,
+    "extra_templates_dir": "extra_templates",
+    "auto_restart": {
+        "enabled": true,
+        "output_timeout": 300,
+        "match_timeout": 1200
+    },
+    "devices": [
+        {
+            "name": "模拟器-127.0.0.1:16384",
+            "serial": "127.0.0.1:16384",
+            "is_global": true,
+            "screenshot_deep_color": true
+        }
+    ],
+    "game": {
+        "resolution": "720p",
+        "evolution_rounds": [
+            5,
+            6,
+            7,
+            8,
+            9
+        ],
+        "evolution_rounds_with_extra_cost": [
+            4,
+            5,
+            6,
+            7,
+            8
+        ],
+        "max_follower_count": 5,
+        "cost_recognition": {
+            "confidence_threshold": 0.6,
+            "max_cost": 10,
+            "min_cost": 0
+        },
+        "human_like_drag_duration_range": [
+            0.3,
+            0.6
+        ]
+    },
+    "ui": {
+        "notification_enabled": true,
+        "log_level": "INFO",
+        "save_screenshots": false,
+        "debug_mode": false
+    },
+    "templates": {
+        "threshold": 0.85,
+        "pyramid_levels": 2,
+        "edge_thresholds": [
+            50,
+            200
+        ]
+    },
+    "server": "intl",
+    "dark_mode": false,
+    "window": {
+        "width": 1200,
+        "height": 1000
+    },
+    "high_priority_cards": {
+        "骑士": {
+            "priority": 4
+        },
+        "须臾剑士": {
+            "priority": 1
+        },
+        "三将姬的乱击": {
+            "priority": 3
+        },
+        "信念腿法兰德尔": {
+            "priority": 2
+        },
+        "勇猛的鲁米那斯枪士": {
+            "priority": 2
+        },
+        "异端武士": {
+            "priority": 3
+        },
+        "决心之辉龙亚瑟": {
+            "priority": 5
+        },
+        "如火斗志菲泽": {
+            "priority": 1
+        },
+        "常在战场景光": {
+            "priority": 2
+        },
+        "瓦路兹": {
+            "priority": 2
+        },
+        "迷茫的狮子莫德雷德": {
+            "priority": 2
+        },
+        "斯塔奇鸟姆": {
+            "priority": 2
+        },
+        "真红与群青塞达贝阿朵丽丝": {
+            "priority": 2
+        },
+        "雷维翁的迅番阿尔贝尔": {
+            "priority": 1
+        },
+        "小栗帽": {
+            "priority": 1
+        },
+        "触手撕咬": {
+            "priority": 1
+        },
+        "人马骑士": {
+            "priority": 1
+        }
+    },
+    "evolve_priority_cards": {
+        "须臾剑士": {
+            "priority": 3
+        },
+        "信念腿法兰德尔": {
+            "priority": 3
+        },
+        "常在战场景光": {
+            "priority": 3
+        },
+        "迷茫的狮子莫德雷德": {
+            "priority": 3
+        },
+        "斯塔奇鸟姆": {
+            "priority": 1
+        },
+        "雷维翁的迅番阿尔贝尔": {
+            "priority": 1
+        },
+        "小栗帽": {
+            "priority": 1
+        },
+        "人马骑士": {
+            "priority": 1
+        }
+    }
+}

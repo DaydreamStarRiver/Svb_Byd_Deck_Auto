@@ -1,0 +1,75 @@
+{
+    "adb_port": 5037,
+    "devices": [
+        {
+            "name": "模拟器-127.0.0.1:16384",
+            "serial": "127.0.0.1:16384",
+            "is_global": true,
+            "screenshot_deep_color": false
+        }
+    ],
+    "game": {
+        "human_like_drag_duration_range": [
+            0.1,
+            0.13
+        ]
+    },
+    "change_card_cost_threshold": 3,
+    "priority_cards": {
+        "烈绝的灭牙": {
+            "priority": 5
+        },
+        "虎鲸的呼声": {
+            "priority": 3
+        },
+        "海洋骑手": {
+            "priority": 4
+        },
+        "荣弦的奏乐": {
+            "priority": 2
+        },
+        "银冰吐息": {
+            "priority": 2
+        },
+        "飓风天业格里姆尼尔": {
+            "priority": 4
+        },
+        "龙之启示": {
+            "priority": 3
+        },
+        "侮蔑的祈祷者": {
+            "priority": 5
+        },
+        "烈绝的显现嘉尔缪": {
+            "priority": 5
+        },
+        "灾祸吐息": {
+            "priority": 3
+        },
+        "命运黄昏奥丁": {
+            "priority": 5
+        },
+        "苍诲的制裁尼普顿": {
+            "priority": 4
+        },
+        "凶鲎战士": {
+            "priority": 4
+        },
+        "绚丽凤凰": {
+            "priority": 5
+        },
+        "龙人演义卧龙": {
+            "priority": 4
+        },
+        "侮蔑的继承者安吉拉弗利特": {
+            "priority": 5
+        },
+        "夜幕龙": {
+            "priority": 5
+        }
+    },
+    "window": {
+        "width": 1200,
+        "height": 1000
+    }
+}
