@@ -3,13 +3,15 @@
 实现核心游戏逻辑和操作
 """
 
+from re import T
 import cv2
+from easyocr.craft import F
 import numpy as np
 import random
 import time
 import logging
 import os
-import re
+import gc
 from src.game.follower_manager import FollowerManager
 from src.game.cost_recognition import CostRecognition
 from src.game.template_manager import TemplateManager
@@ -20,7 +22,7 @@ from src.config.game_constants import (
     OUR_FOLLOWER_REGION, OUR_ATK_REGION, OUR_FOLLOWER_HSV,
     ENEMY_HP_REGION_OFFSET_X, ENEMY_HP_REGION_OFFSET_Y,
     ENEMY_FOLLOWER_OFFSET_X, ENEMY_FOLLOWER_OFFSET_Y,
-    ENEMY_ATK_REGION, OCR_CROP_HALF_SIZE, ENEMY_SHIELD_REGION,ENEMY_ATK_HSV,OUR_ATKHP_REGION
+    ENEMY_ATK_REGION, OCR_CROP_HALF_SIZE, ENEMY_SHIELD_REGION,ENEMY_ATK_HSV
 )
 
 logger = logging.getLogger(__name__)
@@ -40,86 +42,7 @@ class GameManager:
         
         # 设置设备状态中的随从管理器
         device_state.follower_manager = self.follower_manager
-        self.is_global = self.device_state.device_config.get('is_global', False)
-        self.hp_templates = self.load_hp_templates()
-        self.atk_templates = self.load_atk_templates()
 
-    def load_hp_templates(self):
-        """加载血量模板图片"""
-        templates = {}
-        if self.is_global:
-            template_dir = "templates_global/hp_count"
-        else:
-            template_dir = "templates/hp_count"
-        if not os.path.isdir(template_dir):
-                logger.warning(f"未找到HP模板目录: {template_dir}")
-                return templates
-        
-        for filename in os.listdir(template_dir):
-            if not filename.lower().endswith(".png"):
-                continue
-    
-            try:
-                # 正则提取数字
-                match = re.match(r"(\d+)", filename)
-                if not match:
-                    logger.warning(f"模板文件名未检测到数字: {filename}")
-                    continue
-    
-                hp_value = match.group(1)
-    
-                path = os.path.join(template_dir, filename)
-                template_img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-                if template_img is None:
-                    logger.warning(f"无法读取模板: {filename}")
-                    continue
-    
-                templates.setdefault(hp_value, []).append(template_img)
-    
-            except Exception as e:
-                logger.error(f"无法读取HP模板 {filename}: {e}")
-    
-        logger.info(f"已加载 {sum(len(v) for v in templates.values())} 个血量模板")
-        return templates
-
-    def load_atk_templates(self):
-        """加载攻击力模板图片"""
-        templates = {}
-        if self.is_global:
-            template_dir = "templates_global/atk_count"
-        else:
-            template_dir = "templates/atk_count"
-        if not os.path.isdir(template_dir):
-                logger.warning(f"未找到ATK模板目录: {template_dir}")
-                return templates
-        
-        for filename in os.listdir(template_dir):
-            if not filename.lower().endswith(".png"):
-                continue
-    
-            try:
-                # 正则提取数字
-                match = re.match(r"(\d+)", filename)
-                if not match:
-                    logger.warning(f"模板文件名未检测到数字: {filename}")
-                    continue
-    
-                atk_value = match.group(1)
-    
-                path = os.path.join(template_dir, filename)
-                template_img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-                if template_img is None:
-                    logger.warning(f"无法读取模板: {filename}")
-                    continue
-    
-                templates.setdefault(atk_value, []).append(template_img)
-    
-            except Exception as e:
-                logger.error(f"无法读取ATK模板 {filename}: {e}")
-    
-        logger.info(f"已加载 {sum(len(v) for v in templates.values())} 个攻击力模板")
-        return templates
- 
     def scan_enemy_ATK(self,screenshot,debug_flag=False):
         """扫描敌方攻击力数值位置，返回敌方随从位置列表"""
         enemy_atk_positions = []
@@ -138,7 +61,7 @@ class GameManager:
         blue_mask = cv2.inRange(hsv_blue, lower_blue, upper_blue)
 
         kernel = np.ones((1, 1), np.uint8)
-        blue_eroded = cv2.erode(cv2.dilate(blue_mask, kernel, iterations=3), kernel, iterations=0)
+        blue_eroded = cv2.erode(cv2.dilate(blue_mask, kernel, iterations=1), kernel, iterations=1)
         blue_contours, _ = cv2.findContours(blue_eroded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         # 创建用于调试的图像
@@ -184,6 +107,9 @@ class GameManager:
 
         return enemy_atk_positions 
 
+        
+        
+
     
     def scan_enemy_followers(self, screenshot, debug_flag=False):
         """检测场上的敌方随从位置与血量"""
@@ -192,11 +118,6 @@ class GameManager:
         # 确保debug目录存在
         if debug_flag:
             os.makedirs("debug", exist_ok=True)
-            # 保存原始screenshot用于调试
-            timestamp = int(time.time() * 1000)
-            screenshot_np = np.array(screenshot)
-            screenshot_cv = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(f"debug/screenshot_{timestamp}.png", screenshot_cv)
 
         # 定义敌方普通随从的血量区域
         region_red = screenshot.crop(ENEMY_HP_REGION)
@@ -217,36 +138,22 @@ class GameManager:
         upper_red = np.array(settings["red"][3:])
         red_mask = cv2.inRange(hsv_red, lower_red, upper_red)
 
-        # 形态学操作 - 使用椭圆核，分别进行腐蚀和膨胀（新方法）
-        kernel_size = 2  # 椭圆核大小
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        # 分别进行腐蚀和膨胀操作
-        erode_iterations = 0
-        dilate_iterations = 4
-        # 先进行腐蚀操作
-        if erode_iterations > 0:
-            red_mask = cv2.erode(red_mask, kernel, iterations=erode_iterations)
-        # 再进行膨胀操作
-        if dilate_iterations > 0:
-            red_mask = cv2.dilate(red_mask, kernel, iterations=dilate_iterations)
+        # 形态学操作优化
+        kernel = np.ones((4, 4), np.uint8)
+        red_eroded = cv2.erode((cv2.dilate(red_mask, kernel, iterations=1)), kernel, iterations=1)
+
         # 查找轮廓
-        red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        red_contours, _ = cv2.findContours(red_eroded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         # 创建用于调试的轮廓图
         if debug_flag:
-            margin = 50
-            height, width, _ = region_red_cv.shape
-            contour_debug = np.zeros((height + 2 * margin, width, 3), dtype=np.uint8)
-            contour_debug[margin:margin + height, :] = region_red_cv
-        else:
-            contour_debug = None
+            contour_debug = region_red_cv.copy()
 
+        # 保存原始区域图像（用于OCR）
+        original_region = region_red_cv.copy()
 
         del region_red_cv
-
-        # 从原始截图中裁剪
-        screenshot_np = np.array(screenshot)
-        screenshot_cv = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2BGR)
+        gc.collect()
 
         for i, cnt in enumerate(red_contours):
             # 获取最小外接矩形
@@ -257,11 +164,11 @@ class GameManager:
             # 检查尺寸是否在合理范围内
             min_dim = min(w, h)
 
-            if 15 > min_dim > 1 :
+            if min_dim > 15 and 5000 > area > 1000:
                 # 原始中心点 (偏移前)
                 center_x, center_y = rect[0]
 
-                # 红色血量中心点的全局坐标
+                # 红色血量的全图坐标
                 center_x_full = int(center_x + ENEMY_HP_REGION_OFFSET_X)
                 center_y_full = int(center_y + ENEMY_HP_REGION_OFFSET_Y)
 
@@ -270,109 +177,46 @@ class GameManager:
                 enemy_y = center_y_full + ENEMY_FOLLOWER_OFFSET_Y
 
                 # 截取区域用于OCR识别
-                # 从HSV中心点创建矩形
-                # 将区域内的中心点x坐标转换到全屏坐标
-                center_x_in_screenshot = center_x + ENEMY_HP_REGION[0]
-                
-                left = int(center_x_in_screenshot - 14)
-                right = int(center_x_in_screenshot + 14)
-                top = 263
-                bottom = 301
+                # 计算在原始区域图像上的截取坐标
+                crop_x1 = int(max(0, center_x - OCR_CROP_HALF_SIZE))
+                crop_y1 = int(max(0, center_y - OCR_CROP_HALF_SIZE))
+                crop_x2 = int(min(original_region.shape[1], center_x + OCR_CROP_HALF_SIZE))
+                crop_y2 = int(min(original_region.shape[0], center_y + OCR_CROP_HALF_SIZE))
 
-                # 从原始截图中裁剪
-                ocr_rect = screenshot_cv[top:bottom, left:right]
-
-                # 二值化
-                gray_rect = cv2.cvtColor(ocr_rect, cv2.COLOR_BGR2GRAY)
-                _, binary_rect = cv2.threshold(gray_rect, 125, 255, cv2.THRESH_BINARY)
-
-                # 提取轮廓
-                contours, _ = cv2.findContours(binary_rect, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                # 创建一个空白图像用于绘制轮廓
-                contour_img = np.zeros_like(binary_rect)
-                cv2.drawContours(contour_img, contours, -1, (255, 255, 255), -1)
-
+                # 截取原始图像区域
+                crop_img = original_region[crop_y1:crop_y2, crop_x1:crop_x2]
                 if debug_flag:
-                    timestamp = int(time.time() * 1000)
-                    cv2.imwrite(f"debug/ocr_contour_{i}_{timestamp}.png", contour_img)
-
-                # 使用轮廓图进行OCR
+                    timestamp2 = int(time.time() * 1000)
+                    cv2.imwrite(f"debug/crop_img_{i}_{timestamp2}.png", crop_img)
+                # 使用EasyOCR识别数字,识别不到的设置血量99
                 if self.reader:
-                    results = self.reader.readtext(contour_img, allowlist='0123456789', detail=1)
+                    results = self.reader.readtext(crop_img, allowlist='0123456789', detail=0)
                 else:
                     results = []
-                
-                hp_value = "99"
-                confidence = 0.0
-
-                if results and isinstance(results, list) and len(results) > 0:
-                    # 找到置信度最高的结果
-                    best_result = max(results, key=lambda item: item[2])
-                    text, prob = best_result[1], best_result[2]
-                    if prob >= 0.6:
-                        hp_value = text
-                        confidence = prob
-
-                # 如果OCR失败或置信度低，则使用模板匹配
-                if confidence < 0.4:
-                    hp_value = "99" # 重置为默认值
-                    best_match_hp = None
-                    max_val = -1.0
-                    
-                    # 使用轮廓图进行匹配
-                    target_img = contour_img
-
-                    for hp, template_list in self.hp_templates.items():
-                        for template in template_list:
-                            if template.shape[0] > target_img.shape[0] or template.shape[1] > target_img.shape[1]:
-                                continue
-                            
-                            res = cv2.matchTemplate(target_img, template, cv2.TM_CCOEFF_NORMED)
-                            _, current_max_val, _, _ = cv2.minMaxLoc(res)
-                            
-                            if current_max_val > max_val:
-                                max_val = current_max_val
-                                best_match_hp = hp
-                    
-                    # 模板匹配阈值
-                    if best_match_hp is not None and max_val > 0.2:
-                        hp_value = best_match_hp
-                        if debug_flag:
-                            logger.info(f"OCR置信度低于 ({confidence:.2f}), 使用模板匹配结果: HP={hp_value} 置信度： {max_val:.2f}")
+                # 确保results是字符串列表，然后合并
+                if results and isinstance(results, list):
+                    # 过滤出字符串类型的结果
+                    string_results = [str(r) for r in results if isinstance(r, str)]
+                    hp_value = ''.join(string_results) if string_results else "99"
+                else:
+                    hp_value = "99"
 
                 # 添加到结果列表
                 enemy_follower_positions.append((enemy_x, enemy_y, "normal", hp_value))
 
                 # 在调试图上绘制信息
-                if debug_flag and contour_debug is not None:
-                    draw_y_offset = margin
-                    
-                    # 绘制轮廓
-                    cnt_shifted = cnt.copy()
-                    cnt_shifted[:, :, 1] += draw_y_offset
-                    cv2.drawContours(contour_debug, [cnt_shifted], 0, (0, 255, 0), 2)
+                if debug_flag:
+                    cv2.drawContours(contour_debug, [cnt], 0, (0, 255, 0), 2)
+                    cv2.circle(contour_debug, (int(center_x), int(center_y)), 5, (0, 255, 255), -1)
+                    cv2.putText(contour_debug, f"HP: {hp_value}", (int(center_x - 20), int(center_y - 20)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                    # 绘制长宽和面积信息
+                    cv2.putText(contour_debug, f"W: {w:.1f} H: {h:.1f}", (int(center_x - 20), int(center_y + 15)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+                    cv2.putText(contour_debug, f"Area: {area:.0f}", (int(center_x - 20), int(center_y + 30)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
 
-                    # 绘制最小外接矩形
-                    box = cv2.boxPoints(rect)
-                    box[:, 1] += draw_y_offset
-                    box = box.astype(int)
-                    cv2.drawContours(contour_debug, [box], 0, (0, 0, 255), 2)
-
-                    # 绘制中心点
-                    draw_center_x = int(center_x)
-                    draw_center_y = int(center_y + draw_y_offset)
-                    cv2.circle(contour_debug, (draw_center_x, draw_center_y), 5, (0, 255, 255), -1)
-                    
-                    # 绘制文本信息
-                    cv2.putText(contour_debug, f"HP: {hp_value}", (draw_center_x - 20, draw_center_y - 20),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-                    cv2.putText(contour_debug, f"W:{w:.1f} H:{h:.1f}", (draw_center_x - 40, draw_center_y + 20),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                    cv2.putText(contour_debug, f"Area:{area:.0f}", (draw_center_x - 40, draw_center_y + 35),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-
-        if debug_flag and contour_debug is not None:
+        if debug_flag:
             timestamp1 = int(time.time() * 1000)
             cv2.imwrite(f"debug/contours_{timestamp1}.png", contour_debug)
 
@@ -382,371 +226,7 @@ class GameManager:
             y_adjusted = ENEMY_FOLLOWER_Y_ADJUST + random.randint(-ENEMY_FOLLOWER_Y_RANDOM, ENEMY_FOLLOWER_Y_RANDOM)
             enemy_adjusted_positions.append((x, y_adjusted, follower_type, hp_value))
 
-        self.device_state.logger.info(f"敌方位置与血量：{enemy_adjusted_positions}")
-
         return enemy_adjusted_positions
-
-    def scan_our_ATK_AND_HP(self, screenshot, debug_flag=False):
-        """检测场上的我方随从攻击力与血量"""
-        our_follower_hp = []
-        our_follower_atk = []
-
-        # 确保debug目录存在
-        if debug_flag:
-            os.makedirs("debug", exist_ok=True)
-            # 保存原始screenshot用于调试
-            timestamp = int(time.time() * 1000)
-            screenshot_np = np.array(screenshot)
-            screenshot_cv = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(f"debug/screenshot_{timestamp}.png", screenshot_cv)
-
-        # 定义我方普通随从的血量区域
-        region_all = screenshot.crop(OUR_ATKHP_REGION)
-        region_all_np = np.array(region_all)
-        region_all_cv = cv2.cvtColor(region_all_np, cv2.COLOR_RGB2BGR)
-
-        del region_all
-        del region_all_np
-
-        # 转换为HSV颜色空间
-        hsv_all = cv2.cvtColor(region_all_cv, cv2.COLOR_BGR2HSV)
-
-        # HSV范围设置
-        settings = OUR_FOLLOWER_HSV
-
-        # 创建红色掩膜
-        lower_red = np.array(settings["red"][:3])
-        upper_red = np.array(settings["red"][3:])
-        red_mask = cv2.inRange(hsv_all, lower_red, upper_red)
-
-        # 创建蓝色掩膜
-        lower_blue = np.array(settings["blue"][:3])
-        upper_blue = np.array(settings["blue"][3:])
-        blue_mask = cv2.inRange(hsv_all, lower_blue, upper_blue)
-
-        # 形态学操作 - 使用椭圆核，分别进行腐蚀和膨胀（新方法）
-        kernel_size = 2  # 椭圆核大小
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        # 分别进行腐蚀和膨胀操作
-        erode_iterations = 0
-        dilate_iterations = 4
-        # 先进行腐蚀操作
-        if erode_iterations > 0:
-            red_mask = cv2.erode(red_mask, kernel, iterations=erode_iterations)
-            blue_mask = cv2.erode(blue_mask, kernel, iterations=erode_iterations)
-        # 再进行膨胀操作
-        if dilate_iterations > 0:
-            red_mask = cv2.dilate(red_mask, kernel, iterations=dilate_iterations)
-            blue_mask = cv2.dilate(blue_mask, kernel, iterations=dilate_iterations)
-        # 查找轮廓
-        red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        blue_contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # 创建用于调试的轮廓图
-        if debug_flag:
-            margin = 50
-            height, width, _ = region_all_cv.shape
-            contour_debug = np.zeros((height + 2 * margin, width, 3), dtype=np.uint8)
-            contour_debug[margin:margin + height, :] = region_all_cv
-        else:
-            contour_debug = None
-
-
-        del region_all_cv
-
-        # 从原始截图中裁剪
-        screenshot_np = np.array(screenshot)
-        screenshot_cv = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2BGR)
-
-        for i, cnt in enumerate(red_contours):
-            # 获取最小外接矩形
-            rect = cv2.minAreaRect(cnt)
-            (x, y), (w, h), angle = rect
-            area = cv2.contourArea(cnt)
-
-            # 检查尺寸是否在合理范围内
-            min_dim = min(w, h)
-
-            if 15 > min_dim > 1 :
-                # 原始中心点 (偏移前)
-                center_x, center_y = rect[0]
-
-                # 红色血量中心点的全局坐标
-                center_x_full = int(center_x + OUR_ATKHP_REGION[0])
-                center_y_full = int(center_y + OUR_ATKHP_REGION[1])
-
-                #我方随从的全图坐标
-                our_x = center_x_full + ENEMY_FOLLOWER_OFFSET_X
-                our_y = center_y_full + ENEMY_FOLLOWER_OFFSET_Y
-
-                # 截取区域用于OCR识别
-                # 从HSV中心点创建矩形
-                # 将区域内的中心点x坐标转换到全屏坐标
-                center_x_in_screenshot = center_x + OUR_ATKHP_REGION[0]
-                
-                left = int(center_x_in_screenshot - 14)
-                right = int(center_x_in_screenshot + 14)
-                top = 432
-                bottom = 468
-
-                # 从原始截图中裁剪
-                ocr_rect = screenshot_cv[top:bottom, left:right]
-
-                # 二值化
-                gray_rect = cv2.cvtColor(ocr_rect, cv2.COLOR_BGR2GRAY)
-                _, binary_rect = cv2.threshold(gray_rect, 125, 255, cv2.THRESH_BINARY)
-
-                # 提取轮廓
-                contours, _ = cv2.findContours(binary_rect, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                # 创建一个空白图像用于绘制轮廓
-                contour_img = np.zeros_like(binary_rect)
-                cv2.drawContours(contour_img, contours, -1, (255, 255, 255), -1)
-
-                if debug_flag:
-                    timestamp = int(time.time() * 1000)
-                    cv2.imwrite(f"debug/our_ocr_contour_{i}_{timestamp}.png", contour_img)
-
-                # 使用轮廓图进行OCR
-                if self.reader:
-                    results = self.reader.readtext(contour_img, allowlist='0123456789', detail=1)
-                else:
-                    results = []
-                
-                hp_value = "99"
-                confidence = 0.0
-
-                if results and isinstance(results, list) and len(results) > 0:
-                    # 找到置信度最高的结果
-                    best_result = max(results, key=lambda item: item[2])
-                    text, prob = best_result[1], best_result[2]
-                    if prob >= 0.6:
-                        hp_value = text
-                        confidence = prob
-
-                # 如果OCR失败或置信度低，则使用模板匹配
-                if confidence < 0.6:
-                    hp_value = "99" # 重置为默认值
-                    best_match_hp = None
-                    max_val = -1.0
-                    
-                    # 使用轮廓图进行匹配
-                    target_img = contour_img
-
-                    for hp, template_list in self.hp_templates.items():
-                        for template in template_list:
-                            if template.shape[0] > target_img.shape[0] or template.shape[1] > target_img.shape[1]:
-                                continue
-                            
-                            res = cv2.matchTemplate(target_img, template, cv2.TM_CCOEFF_NORMED)
-                            _, current_max_val, _, _ = cv2.minMaxLoc(res)
-                            
-                            if current_max_val > max_val:
-                                max_val = current_max_val
-                                best_match_hp = hp
-                    
-                    # 模板匹配阈值
-                    if best_match_hp is not None and max_val > 0.001:
-                        hp_value = best_match_hp
-                        if debug_flag:
-                            logger.info(f"OCR置信度低于 ({confidence:.2f}), 使用模板匹配结果: HP={hp_value} 置信度： {max_val:.2f}")
-
-                # 添加到结果列表
-                our_follower_hp.append((our_x, our_y, hp_value))
-
-                # 在调试图上绘制信息
-                if debug_flag and contour_debug is not None:
-                    draw_y_offset = margin
-                    
-                    # 绘制轮廓
-                    cnt_shifted = cnt.copy()
-                    cnt_shifted[:, :, 1] += draw_y_offset
-                    cv2.drawContours(contour_debug, [cnt_shifted], 0, (0, 255, 0), 2)
-
-                    # 绘制最小外接矩形
-                    box = cv2.boxPoints(rect)
-                    box[:, 1] += draw_y_offset
-                    box = box.astype(int)
-                    cv2.drawContours(contour_debug, [box], 0, (0, 0, 255), 2)
-
-                    # 绘制中心点
-                    draw_center_x = int(center_x)
-                    draw_center_y = int(center_y + draw_y_offset)
-                    cv2.circle(contour_debug, (draw_center_x, draw_center_y), 5, (0, 255, 255), -1)
-                    
-                    # 绘制文本信息
-                    cv2.putText(contour_debug, f"HP: {hp_value}", (draw_center_x - 20, draw_center_y - 20),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-                    cv2.putText(contour_debug, f"W:{w:.1f} H:{h:.1f}", (draw_center_x - 40, draw_center_y + 20),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                    cv2.putText(contour_debug, f"Area:{area:.0f}", (draw_center_x - 40, draw_center_y + 35),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-
-        for i, cnt in enumerate(blue_contours):
-            # 获取最小外接矩形
-            rect = cv2.minAreaRect(cnt)
-            (x, y), (w, h), angle = rect
-            area = cv2.contourArea(cnt)
-
-            # 检查尺寸是否在合理范围内
-            min_dim = min(w, h)
-
-            if 15 > min_dim > 1 :
-                # 原始中心点 (偏移前)
-                center_x, center_y = rect[0]
-
-                # 蓝色攻击力中心点的全局坐标
-                center_x_full = int(center_x + OUR_ATKHP_REGION[0])
-                center_y_full = int(center_y + OUR_ATKHP_REGION[1])
-
-                # 我方随从的全图坐标
-                our_x = center_x_full - ENEMY_FOLLOWER_OFFSET_X
-                our_y = center_y_full + ENEMY_FOLLOWER_OFFSET_Y
-
-                # 截取区域用于OCR识别
-                # 从HSV中心点创建矩形
-                # 将区域内的中心点x坐标转换到全屏坐标
-                center_x_in_screenshot = center_x + OUR_ATKHP_REGION[0]
-                
-                left = int(center_x_in_screenshot - 14)
-                right = int(center_x_in_screenshot + 14)
-                top = 432
-                bottom = 468
-
-                # 从原始截图中裁剪
-                ocr_rect = screenshot_cv[top:bottom, left:right]
-
-                # 二值化
-                gray_rect = cv2.cvtColor(ocr_rect, cv2.COLOR_BGR2GRAY)
-                _, binary_rect = cv2.threshold(gray_rect, 125, 255, cv2.THRESH_BINARY)
-
-                # 提取轮廓
-                contours, _ = cv2.findContours(binary_rect, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                # 创建一个空白图像用于绘制轮廓
-                contour_img = np.zeros_like(binary_rect)
-                cv2.drawContours(contour_img, contours, -1, (255, 255, 255), -1)
-
-                if debug_flag:
-                    timestamp = int(time.time() * 1000)
-                    cv2.imwrite(f"debug/our_ATK_ocr_contour_{i}_{timestamp}.png", contour_img)
-
-                # 使用轮廓图进行OCR
-                if self.reader:
-                    results = self.reader.readtext(contour_img, allowlist='0123456789', detail=1)
-                else:
-                    results = []
-                
-                atk_value = "99"
-                confidence = 0.0
-
-                if results and isinstance(results, list) and len(results) > 0:
-                    # 找到置信度最高的结果
-                    best_result = max(results, key=lambda item: item[2])
-                    text, prob = best_result[1], best_result[2]
-                    if prob >= 0.6:
-                        atk_value = text
-                        confidence = prob
-
-                # 如果OCR失败或置信度低，则使用模板匹配
-                if confidence < 0.6:
-                    atk_value = "99" # 重置为默认值
-                    best_match_atk = None
-                    max_val = -1.0
-                    
-                    # 使用轮廓图进行匹配
-                    target_img = contour_img
-
-                    for atk, template_list in self.atk_templates.items():
-                        for template in template_list:
-                            if template.shape[0] > target_img.shape[0] or template.shape[1] > target_img.shape[1]:
-                                continue
-                            
-                            res = cv2.matchTemplate(target_img, template, cv2.TM_CCOEFF_NORMED)
-                            _, current_max_val, _, _ = cv2.minMaxLoc(res)
-                            
-                            if current_max_val > max_val:
-                                max_val = current_max_val
-                                best_match_atk = atk
-                    
-                    # 模板匹配阈值
-                    if best_match_atk is not None and max_val > 0.001:
-                        atk_value = best_match_atk
-                        if debug_flag:
-                            logger.info(f"OCR置信度低于 ({confidence:.2f}), 使用模板匹配结果: ATK={atk_value} 置信度： {max_val:.2f}")
-
-                # 添加到结果列表
-                our_follower_atk.append((our_x, our_y, atk_value))
-
-                # 在调试图上绘制信息
-                if debug_flag and contour_debug is not None:
-                    draw_y_offset = margin
-                    
-                    # 绘制轮廓
-                    cnt_shifted = cnt.copy()
-                    cnt_shifted[:, :, 1] += draw_y_offset
-                    cv2.drawContours(contour_debug, [cnt_shifted], 0, (0, 255, 0), 2)
-
-                    # 绘制最小外接矩形
-                    box = cv2.boxPoints(rect)
-                    box[:, 1] += draw_y_offset
-                    box = box.astype(int)
-                    cv2.drawContours(contour_debug, [box], 0, (0, 0, 255), 2)
-
-                    # 绘制中心点
-                    draw_center_x = int(center_x)
-                    draw_center_y = int(center_y + draw_y_offset)
-                    cv2.circle(contour_debug, (draw_center_x, draw_center_y), 5, (0, 255, 255), -1)
-                    
-                    # 绘制文本信息
-                    cv2.putText(contour_debug, f"ATK: {atk_value}", (draw_center_x - 20, draw_center_y - 20),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-                    cv2.putText(contour_debug, f"W:{w:.1f} H:{h:.1f}", (draw_center_x - 40, draw_center_y + 20),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                    cv2.putText(contour_debug, f"Area:{area:.0f}", (draw_center_x - 40, draw_center_y + 35),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-        
-        # 先按X坐标排序，方便匹配
-        our_follower_hp.sort(key=lambda p: p[0])   # (x, y, hp_value)
-        our_follower_atk.sort(key=lambda p: p[0])  # (x, y, atk_value)
-        
-        paired_result = []
-        DEFAULT_ATK = 1  # 默认攻击力
-        THRESHOLD = 70   # 匹配的最大像素距离
-        
-        matched_atk_indices = set()
-        
-        for hp_x, hp_y, hp_value in our_follower_hp:
-            best_atk_index = None
-            best_dx = float('inf')
-        
-            for atk_index, (atk_x, atk_y, atk_value) in enumerate(our_follower_atk):
-                if atk_index in matched_atk_indices:
-                    continue
-                dx = abs(hp_x - atk_x)
-                if dx < best_dx:
-                    best_dx = dx
-                    best_atk_index = atk_index
-        
-            if best_atk_index is not None and best_dx <= THRESHOLD:
-                atk_x, atk_y, atk_value = our_follower_atk[best_atk_index]
-                matched_atk_indices.add(best_atk_index)
-            else:
-                atk_value = DEFAULT_ATK  # 没匹配到就用默认值
-        
-            # y 坐标这里我直接固定在 399±7 之间
-            paired_result.append((hp_x, 399 + random.randint(-7, 7), atk_value, hp_value))
-        
-        paired_result.sort(key=lambda p: p[0])  # 按 X 坐标排序
-
-        if debug_flag and contour_debug is not None:
-            timestamp1 = int(time.time() * 1000)
-            cv2.imwrite(f"debug/contours_{timestamp1}.png", contour_debug)
-
-
-        self.device_state.logger.info(f"我方攻击力与血量：{paired_result}")
-
-        return paired_result
 
     def scan_our_followers(self, screenshot, debug_flag=False):
         """检测场上的我方随从位置和状态，扫描结果合并去重结果（并发优化）"""
@@ -803,39 +283,27 @@ class GameManager:
             settings = OUR_FOLLOWER_HSV
             lower_green = np.array(settings["green"][:3])
             upper_green = np.array(settings["green"][3:])
-            lower_green2 = np.array(settings["green2"][:3])
-            upper_green2 = np.array(settings["green2"][3:])
-            green2_mask = cv2.inRange(hsv_color, lower_green2, upper_green2)
             lower_yellow1 = np.array(settings["yellow1"][:3])
             upper_yellow1 = np.array(settings["yellow1"][3:])
-            lower_yellow2 = np.array(settings["yellow2"][:3])
-            upper_yellow2 = np.array(settings["yellow2"][3:])
             lower_blue = np.array(settings["blue"][:3])
             upper_blue = np.array(settings["blue"][3:])
             green_mask = cv2.inRange(hsv_color, lower_green, upper_green)
             yellow1_mask = cv2.inRange(hsv_color, lower_yellow1, upper_yellow1)
-            yellow2_mask = cv2.inRange(hsv_color, lower_yellow2, upper_yellow2)
             blue_mask = cv2.inRange(hsv_blue, lower_blue, upper_blue)
             kernel = np.ones((1, 1), np.uint8)
-            green_eroded = cv2.erode(cv2.dilate(green_mask, kernel, iterations=3), kernel, iterations=0)
-            green2_eroded = cv2.erode(cv2.dilate(green2_mask, kernel, iterations=3), kernel, iterations=0)
-            yellow1_eroded = cv2.erode(cv2.dilate(yellow1_mask, kernel, iterations=3), kernel, iterations=0)
-            yellow2_eroded = cv2.erode(cv2.dilate(yellow2_mask, kernel, iterations=3), kernel, iterations=0)
-            blue_eroded = cv2.erode(cv2.dilate(blue_mask, kernel, iterations=3), kernel, iterations=0)
+            green_eroded = cv2.erode(cv2.dilate(green_mask, kernel, iterations=1), kernel, iterations=1)
+            yellow1_eroded = cv2.erode(cv2.dilate(yellow1_mask, kernel, iterations=1), kernel, iterations=1)
+            blue_eroded = cv2.erode(cv2.dilate(blue_mask, kernel, iterations=1), kernel, iterations=1)
 
             from concurrent.futures import ThreadPoolExecutor
             def find_contours(mask):
                 return cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
             with ThreadPoolExecutor(max_workers=5) as executor:
                 future_green = executor.submit(find_contours, green_eroded)
-                future_green2 = executor.submit(find_contours, green2_eroded)
                 future_yellow1 = executor.submit(find_contours, yellow1_eroded)
-                future_yellow2 = executor.submit(find_contours, yellow2_eroded)
                 future_blue = executor.submit(find_contours, blue_eroded)
                 green_contours = future_green.result()
-                green2_contours = future_green2.result()
                 yellow1_contours = future_yellow1.result()
-                yellow2_contours = future_yellow2.result()
                 blue_contours = future_blue.result()
             follower_positions = []
             green_rects = []
@@ -946,80 +414,6 @@ class GameManager:
                             cv2.circle(debug_img_color, (debug_cx, debug_cy), 5, (0, 0, 255), -1)
                             label = f"W:{w:.1f} H:{h:.1f} Area:{area:.0f}"
                             cv2.putText(debug_img_color, label, (debug_cx, debug_cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-
-            for cnt in green2_contours:
-                rect = cv2.minAreaRect(cnt)
-                (x, y), (w, h), angle = rect
-                area = cv2.contourArea(cnt)
-                min_dim = min(w, h)
-                max_dim = max(w, h)
-                if max_dim > 230:
-                    # 1. 提取该轮廓的mask
-                    mask = np.zeros(region_color_cv.shape[:2], np.uint8)
-                    cv2.drawContours(mask, [cnt], -1, 255, -1)
-                    # 2. 距离变换
-                    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-                    ret, sure_fg = cv2.threshold(dist, 0.5*dist.max(), 255, 0)
-                    sure_fg = np.uint8(sure_fg)
-                    # 3. 连通域
-                    ret, markers = cv2.connectedComponents(sure_fg)
-                    markers = markers + 1
-                    markers[mask == 0] = 0
-                    # 4. 分水岭
-                    color_img = region_color_cv.copy()
-                    cv2.watershed(color_img, markers)
-                    # 5. 提取分割后每个目标的中心点
-                    for label in range(2, np.max(markers)+1):
-                        pts = np.column_stack(np.where(markers == label))
-                        if len(pts) == 0:
-                            continue
-                        cy, cx = np.mean(pts, axis=0)
-                        center_x_full = cx + 176
-                        center_y_full = cy + 295
-                        # 绿色随从去重检查（分水岭分割后）
-                        is_duplicate = False
-                        for gx, gy in green_centers:
-                            if abs(center_x_full - gx) < 50:
-                                is_duplicate = True
-                                break
-                        if is_duplicate:
-                            continue
-                        green_centers.append((center_x_full, center_y_full))
-                        follower_positions.append((center_x_full, center_y_full, "green"))
-                        if debug_flag:
-                            # 调整debug坐标，因为debug图像包含了更大的区域
-                            debug_cx = int(cx)
-                            debug_cy = int(cy) + 30  # 向下偏移30像素
-                            cv2.circle(debug_img_color, (debug_cx, debug_cy), 7, (0, 255, 255), 2)
-                    continue  # 分水岭后不再走后续逻辑
-                if 150 > max_dim > 90 or 230 > max_dim > 200:
-                    center_x, center_y = rect[0]
-                    center_x_full = center_x + 176
-                    center_y_full = center_y + 295
-                    is_duplicate = False
-                    for gx, gy in green_centers:
-                        if abs(center_x_full - gx) < 50:
-                            is_duplicate = True
-                            break
-                    if is_duplicate:
-                        continue
-                    follower_positions.append((center_x_full, center_y_full, "green"))
-                    box = cv2.boxPoints(rect)
-                    green_rects.append(box)
-                    if debug_flag:
-                        box = cv2.boxPoints(rect)
-                        box = box.astype(np.int32)
-                        # 调整debug坐标，因为debug图像包含了更大的区域
-                        debug_box = box.copy()
-                        debug_box[:, 1] += 30  # Y坐标向下偏移30像素
-                        cv2.drawContours(debug_img_color, [debug_box], 0, (0, 255, 0), 2)
-                        cx, cy = int(center_x), int(center_y)
-                        # 调整debug坐标，因为debug图像包含了更大的区域
-                        debug_cx = cx
-                        debug_cy = cy + 30  # 向下偏移30像素
-                        cv2.circle(debug_img_color, (debug_cx, debug_cy), 5, (0, 0, 255), -1)
-                        label = f"W:{w:.1f} H:{h:.1f} Area:{area:.0f}"
-                        cv2.putText(debug_img_color, label, (debug_cx, debug_cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
             # 处理黄色框
             for cnt in yellow1_contours:
                 rect = cv2.minAreaRect(cnt)
@@ -1093,88 +487,6 @@ class GameManager:
                             break
                     follower_type = "green" if is_inside_green else "yellow"
                     follower_positions.append((center_x_full, center_y_full, follower_type))
-                    if debug_flag:
-                        box = cv2.boxPoints(rect)
-                        box = box.astype(np.int32)
-                        # 调整debug坐标，因为debug图像包含了更大的区域
-                        debug_box = box.copy()
-                        debug_box[:, 1] += 30  # Y坐标向下偏移30像素
-                        cv2.drawContours(debug_img_color, [debug_box], 0, (0, 255, 255), 2)
-                        cx, cy = int(center_x), int(center_y)
-                        # 调整debug坐标，因为debug图像包含了更大的区域
-                        debug_cx = cx
-                        debug_cy = cy + 30  # 向下偏移30像素
-                        cv2.circle(debug_img_color, (debug_cx, debug_cy), 5, (0, 0, 255), -1)
-                        label = f"W:{w:.1f} H:{h:.1f} Area:{area:.0f}"
-                        cv2.putText(debug_img_color, label, (debug_cx, debug_cy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-            
-            for cnt in yellow2_contours:
-                rect = cv2.minAreaRect(cnt)
-                (x, y), (w, h), angle = rect
-                area = cv2.contourArea(cnt)
-                min_dim = min(w, h)
-                max_dim = max(w, h)
-                if max_dim > 230:
-                    # 1. 提取该轮廓的mask
-                    mask = np.zeros(region_color_cv.shape[:2], np.uint8)
-                    cv2.drawContours(mask, [cnt], -1, 255, -1)
-                    # 2. 距离变换
-                    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-                    ret, sure_fg = cv2.threshold(dist, 0.5*dist.max(), 255, 0)
-                    sure_fg = np.uint8(sure_fg)
-                    # 3. 连通域
-                    ret, markers = cv2.connectedComponents(sure_fg)
-                    markers = markers + 1
-                    markers[mask == 0] = 0
-                    # 4. 分水岭
-                    color_img = region_color_cv.copy()
-                    cv2.watershed(color_img, markers)
-                    # 5. 提取分割后每个目标的中心点
-                    for label in range(2, np.max(markers)+1):
-                        pts = np.column_stack(np.where(markers == label))
-                        if len(pts) == 0:
-                            continue
-                        cy, cx = np.mean(pts, axis=0)
-                        center_x_full = cx + 176
-                        center_y_full = cy + 295
-                        # 判断是否在绿色框内
-                        is_inside_green = False
-                        for g_box in green_rects:
-                            g_box_full = g_box.copy()
-                            g_box_full[:, 0] += 176
-                            g_box_full[:, 1] += 295
-                            if cv2.pointPolygonTest(g_box_full, (center_x_full, center_y_full), False) >= 0:
-                                is_inside_green = True
-                                break
-                        if is_inside_green:
-                            continue  # 跳过该黄色点
-                        # 黄色随从去重检查（分水岭分割后）
-                        is_duplicate = False
-                        for yx, yy in yellow_centers:
-                            if abs(center_x_full - yx) < 50:
-                                is_duplicate = True
-                                break
-                        if is_duplicate:
-                            continue
-                        follower_positions.append((center_x_full, center_y_full, "yellow"))
-                        yellow_centers.append((center_x_full, center_y_full))
-                        if debug_flag:
-                            cv2.circle(debug_img_color, (int(cx), int(cy)), 7, (0, 255, 255), 2)
-                    continue  # 分水岭后不再走后续逻辑
-                if 120 > max_dim > 90 or 230 > max_dim > 200 :
-                    center_x, center_y = rect[0]
-                    center_x_full = center_x + 176
-                    center_y_full = center_y + 295
-                    # 黄色随从去重检查
-                    is_duplicate = False
-                    for yx, yy in yellow_centers:
-                        if abs(center_x_full - yx) < 50:
-                            is_duplicate = True
-                            break
-                    if is_duplicate:
-                        continue
-                    follower_positions.append((center_x_full, center_y_full, "yellow"))
-                    yellow_centers.append((center_x_full, center_y_full))
                     if debug_flag:
                         box = cv2.boxPoints(rect)
                         box = box.astype(np.int32)
@@ -1294,7 +606,7 @@ class GameManager:
             found = False
             for existing_rect in deduplicated_follower_positions:
                 (ex1, ey1), (ex2, ey2) = existing_rect
-                if abs(x1 - ex1) < 50:  # 左上角x轴距离小于50像素
+                if abs(x1 - ex1) < 54:  # 左上角x轴距离小于54像素
                     found = True
                     break
             if not found:
@@ -1473,42 +785,42 @@ class GameManager:
             x=int(x)
             name = None
             best_match_distance = float('inf')
-            # 在SIFT结果中寻找最近的匹配（x轴距离在50像素内）
+            
+            # 在SIFT结果中寻找最近的匹配（x轴距离在30像素内）
             for sift_item in sift_results:
                 cx, cy, sift_name = sift_item
                 x_distance = abs(cx - x)
-                if x_distance < 50 and x_distance < best_match_distance:
+                if x_distance < 30 and x_distance < best_match_distance:
                     name = sift_name
                     best_match_distance = x_distance
+            
             # 检查x, y是否为NaN，若是则跳过
             import numpy as np
             if np.isnan(x) or np.isnan(y):
                 continue
             result_with_name.append((x, y, t, name))
+        
         # 强制校准我方随从在y轴的坐标
         result_with_name = [(x, 399+random.randint(-7, 7), t, name) for (x, y, t, name) in result_with_name]
+        
 
-
-
-        # # 横向x坐标上相距不超过 30 像素的随从，视为同一个，保留优先级最高的随从
-        # priority_type = {'green': 3, 'yellow': 2, 'normal': 1}
-        # # 按优先级从高到低排序
-        # result_with_name.sort(key=lambda x: -priority_type.get(x[2], 0))
-        # filtered_result = []
-        # for x, y, color, name in result_with_name:
-        #     is_duplicate = False
-        #     for i, (fx, fy, fcolor, fname) in enumerate(filtered_result):
-        #         if abs(x - fx) < 30:
-        #             # 已存在一个位置非常接近的随从，认为是同一个，跳过当前（因为当前优先级低）
-        #             is_duplicate = True
-        #             break
-        #     if not is_duplicate:
-        #         filtered_result.append((x, y, color, name))
-        # 最后按x坐标排序（从左到右）
-        result_with_name = sorted(result_with_name, key=lambda pos: pos[0])
-        self.device_state.logger.info(f"我方当前场上随从: {result_with_name}")
+        # 对最终结果去重筛选：green > yellow > normal
+        priority_type = {'green': 3, 'yellow': 2, 'normal': 1}
+        filtered_result = []
+        for x, y, color, name in result_with_name:
+            keep = True
+            for i, (fx, fy, fcolor, fname) in enumerate(filtered_result):
+                if abs(x - fx) < 30 and name == fname:
+                    if priority_type.get(color, 0) > priority_type.get(fcolor, 0):
+                        filtered_result[i] = (x, y, color, name)  # 用当前的替换
+                    keep = False  # 无论是否替换，都不追加当前
+                    break
+            if keep:
+                filtered_result.append((x, y, color, name))
+        filtered_result=sorted(filtered_result,key=lambda pos: pos[0])
+        self.device_state.logger.info(f"我方当前场上随从: {filtered_result}")
                 
-        return result_with_name
+        return filtered_result
 
     def scan_shield_targets(self,debug_flag=False):
         """扫描护盾（多线程并发处理）"""
@@ -1531,6 +843,8 @@ class GameManager:
         if images:
             last_screenshot = self.device_state.take_screenshot()
         
+        if not images or last_screenshot is None:
+            return []  # 如果没有图像，直接返回空列表
             
         # 使用线程池并行处理攻击力检测和护盾检测
         with ThreadPoolExecutor(max_workers=6) as executor:
@@ -1603,23 +917,26 @@ class GameManager:
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, np.array([23, 46, 30]), np.array([89, 255, 255]))
 
-        # 形态学操作 - 使用椭圆核，分别进行腐蚀和膨胀（新方法）
-        kernel_size = 3  # 椭圆核大小
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        # 分别进行腐蚀和膨胀操作
-        erode_iterations = 1
-        dilate_iterations = 3
-        # 先进行腐蚀操作
-        if erode_iterations > 0:
-            mask = cv2.erode(mask, kernel, iterations=erode_iterations)
-        # 再进行膨胀操作
-        if dilate_iterations > 0:
-            mask = cv2.dilate(mask, kernel, iterations=dilate_iterations)
+        # # 形态学操作 - 使用椭圆核，分别进行腐蚀和膨胀（新方法）
+        # kernel_size = 2  # 椭圆核大小
+        # kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        
+        # # 分别进行腐蚀和膨胀操作
+        # erode_iterations = 1
+        # dilate_iterations = 1
+        
+        # # 先进行腐蚀操作
+        # if erode_iterations > 0:
+        #     mask = cv2.erode(mask, kernel, iterations=erode_iterations)
+        
+        # # 再进行膨胀操作
+        # if dilate_iterations > 0:
+        #     mask = cv2.dilate(mask, kernel, iterations=dilate_iterations)
 
         
-        # # 形态学操作
-        # kernel = np.ones((1,1 ), np.uint8)
-        # mask = cv2.erode(cv2.dilate(mask, kernel, iterations=1), kernel, iterations=1)
+        # 形态学操作
+        kernel = np.ones((1,1 ), np.uint8)
+        mask = cv2.erode(cv2.dilate(mask, kernel, iterations=1), kernel, iterations=1)
         # 查找轮廓
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -1629,12 +946,11 @@ class GameManager:
             min_dim = min(w, h)
             max_dim = max(w, h)
             
-            if  (150>max_dim >70 and 75>min_dim>50 and area > 700) :
+            if  (140>max_dim >80 and 72>min_dim>55 and area > 700) :
                 cx, cy = x + w // 2, y + h // 2
                 # 自动转换为全屏坐标
                 global_cx = cx + offset_x
                 global_cy = cy + offset_y
-                global_cx = int(global_cx)
                 shield_targets.append((global_cx, global_cy))
                 if debug_flag:
                         # 创建调试图像
@@ -1679,25 +995,11 @@ class GameManager:
         lower_bound = np.array([4, 151, 28])
         upper_bound = np.array([89, 255, 255])
         mask = cv2.inRange(hsv, lower_bound, upper_bound)
-
-        # 形态学操作 - 使用椭圆核，分别进行腐蚀和膨胀（新方法）
-        kernel_size = 3  # 椭圆核大小
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        # 分别进行腐蚀和膨胀操作
-        erode_iterations = 0
-        dilate_iterations = 4
-        # 先进行腐蚀操作
-        if erode_iterations > 0:
-            mask = cv2.erode(mask, kernel, iterations=erode_iterations)
-        # 再进行膨胀操作
-        if dilate_iterations > 0:
-            mask = cv2.dilate(mask, kernel, iterations=dilate_iterations)
-
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
             area = cv2.contourArea(cnt)
-            if 200 <area < 1200:
+            if 500 <area < 1200:
                 # 转换为全局坐标
                 cx, cy = x + w // 2, y + h // 2
                 global_x = can_choose_region[0] + cx
@@ -1743,4 +1045,4 @@ class GameManager:
             if max_val >= enemy_round_template['threshold'] and max_loc is not None:
                 return True
 
-        return False
+        return False 

@@ -39,7 +39,6 @@ class HandCardManager:
         self.sift_recognition = HandCardManager._sift_recognition_instance
 
     def recognize_hand_shield_card(self) -> bool:
-        
         """
         检测手牌中是否有守护卡牌名字
         
@@ -152,7 +151,6 @@ class HandCardManager:
                     from src.config.game_constants import DEFAULT_ATTACK_TARGET
                     self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
                     time.sleep(1.2)
-                    
             
             except Exception as e:
                 logger.error(f"第{attempt + 1}次手牌识别尝试出错: {str(e)}")

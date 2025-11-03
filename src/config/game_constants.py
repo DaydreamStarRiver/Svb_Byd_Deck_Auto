@@ -11,11 +11,10 @@ ENEMY_HP_REGION = (249, 249, 1015, 310)
 # 敌方随从攻击力检测区域 (左上角x, 左上角y, 右下角x, 右下角y)
 ENEMY_ATK_REGION = (263, 297, 1015, 307)
 
-# 我方随从检测区域 (左上角x, 左上角y, 右下角x, 右下角y)
+# 我方随从检测区域
 OUR_FOLLOWER_REGION = (176, 307, 1064, 334)  # 疾驰/突进随从区域
-OUR_ATK_REGION = (263, 466, 1015, 480)  # 我方随从攻击力区域
-OUR_HP_REGION = (263, 466, 1015, 480)  # 我方随从血量区域
-OUR_ATKHP_REGION = (263, 466, 1015, 480)  # 我方随从攻击力和血量统一区域
+OUR_ATK_REGION = (263, 466, 1015, 480)  # 我方随从血量区域
+OUR_HP_REGION = (263, 466, 1015, 480)
 
 # 敌方护盾检测区域 (左上角x, 左上角y, 右下角x, 右下角y)
 ENEMY_SHIELD_REGION = (164, 136, 1096, 228)
@@ -246,4 +245,4 @@ TEMPLATE_PATHS = {
 DEBUG_PATHS = {
     "debug_dir": "debug",
     "debug_cost_dir": "debug_cost"
-}
+} 

@@ -6,7 +6,6 @@
 import threading
 import logging
 import time
-import datetime
 from adbutils import device
 import cv2
 import numpy as np
@@ -233,21 +232,6 @@ class DeviceManager:
 
                 # 处理对战开始/结束逻辑
                 if key == 'war':
-                    # 检测当前系统时间，位于凌晨1：00-2：00之间时睡眠8小时
-                    # Get current local time as a datetime object
-                    current_time = datetime.datetime.now().time()
-                    
-                    # Define the target time range (1:00 AM to 2:00 AM)
-                    start_time = datetime.time(1, 0)   # 1:00 AM
-                    end_time = datetime.time(1, 0)     # 2:00 AM
-                    
-                    # Check if current time is within the target range
-                    if start_time <= current_time < end_time:
-                        print("Current time is between 1:00 AM and 2:00 AM. Sleeping for 8 hours...")
-                        time.sleep(8 * 3600)  # Sleep for 8 hours (8 * 3600 seconds)
-                        print("Sleep complete.")
-                    else:
-                        print(f"Current time {current_time.strftime('%H:%M:%S')} is outside target range. No sleep needed.")
                     # 检测到"决斗"按钮，表示新对战开始
                     device_state.logger.debug(f"检测到决斗按钮 - 当前in_match: {device_state.in_match}")
                     # 计算中心点并点击

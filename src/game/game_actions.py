@@ -348,7 +348,7 @@ class GameActions:
         
         
         #移除手牌光标提高识别率
-        #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
+        self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
         time.sleep(0.3)
         
         # 获取截图
@@ -409,7 +409,7 @@ class GameActions:
         )
         time.sleep(0.2)
         #移除手牌光标提高识别率
-        #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
+        self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
         time.sleep(0.3)
 
         # 获取截图
@@ -724,8 +724,9 @@ class GameActions:
                 time.sleep(0.2)
                 #点击展牌位置
                 self.device_state.u2_device.click(SHOW_CARDS_BUTTON[0] + random.randint(-2,2), SHOW_CARDS_BUTTON[1] + random.randint(-2,2))
+                time.sleep(0.2)
                 #移除手牌光标提高识别率
-                #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
+                self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
                 time.sleep(1)
                 new_cards = hand_manager.get_hand_cards_with_retry(max_retries=2, silent=True)
                 if new_cards:
@@ -782,7 +783,7 @@ class GameActions:
         self.device_state.u2_device.click(SHOW_CARDS_BUTTON[0] + random.randint(-2,2), SHOW_CARDS_BUTTON[1] + random.randint(-2,2))
         time.sleep(0.2)
         #移除手牌光标提高识别率
-        #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
+        self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
         time.sleep(1)
         
         new_cards = hand_manager.get_hand_cards_with_retry(max_retries=2, silent=True)
@@ -826,7 +827,7 @@ class GameActions:
                 self.device_state.u2_device.click(SHOW_CARDS_BUTTON[0] + random.randint(-2,2), SHOW_CARDS_BUTTON[1] + random.randint(-2,2))
                 time.sleep(0.2)
                 #移除手牌光标提高识别率
-                #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
+                self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
                 time.sleep(1)
                 
                 new_cards = hand_manager.get_hand_cards_with_retry(max_retries=3, silent=True)
@@ -874,7 +875,7 @@ class GameActions:
             self.device_state.u2_device.click(SHOW_CARDS_BUTTON[0] + random.randint(-2,2), SHOW_CARDS_BUTTON[1] + random.randint(-2,2))
             time.sleep(0.2)
             #移除手牌光标提高识别率
-            #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
+            self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
             time.sleep(1.5)
             
             new_cards = hand_manager.get_hand_cards_with_retry(max_retries=3, silent=True)
