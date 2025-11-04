@@ -3,7 +3,7 @@
 实现核心游戏逻辑和操作
 """
 
-from re import T
+# from re import T
 import cv2
 from easyocr.craft import F
 import numpy as np

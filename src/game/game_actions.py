@@ -1337,6 +1337,239 @@ class GameActions:
             return self.device_state.game_manager.template_manager.load_super_evolution_template()
         return None 
 
+def perform_card_replacement(strategy, device, templates_cost):
+    """
+    执行换牌操作：根据选择的策略检测手牌并替换不符合条件的牌
+
+    Args:
+        strategy: 换牌策略 ('3费档次', '4费档次', '5费档次')
+        device: 设备状态对象
+        templates_cost: 模板费用字典
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # 识别手牌费用
+    hand_costs = []
+    # 这里需要根据实际实现来识别手牌费用
+    # hand_costs = recognize_hand_costs(device, templates_cost)
+    
+    # 确定需要替换的牌
+    replace_indices = _determine_cards_to_replace(hand_costs, strategy)
+    
+    # 执行换牌操作
+    for index in replace_indices:
+        # 这里需要根据实际实现来执行换牌操作
+        # perform_replace_action(device, index)
+        pass
+    
+    if replace_indices:
+        logger.info(f"根据策略'{strategy}'替换手牌: {replace_indices}")
+    else:
+        logger.info(f"根据策略'{strategy}'无需换牌")
+
+
+def _determine_cards_to_replace(hand_costs, strategy):
+    """
+    根据策略和手牌费用决定哪些牌需要替换
+
+    Args:
+        hand_costs: 4张手牌的费用列表
+        strategy: 换牌策略
+
+    Returns:
+        需要替换的牌的索引列表
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"当前手牌费用: {hand_costs}")
+
+    # 根据策略检查，使用向下兼容
+    if strategy == '5费档次':
+        result = _check_5_cost_strategy(hand_costs)
+        if result is not None:
+            return result
+        logger.info("5费档次条件不满足，检查4费档次")
+        strategy = '4费档次'
+
+    if strategy == '4费档次':
+        result = _check_4_cost_strategy(hand_costs)
+        if result is not None:
+            return result
+        logger.info("4费档次条件不满足，检查3费档次")
+        strategy = '3费档次'
+
+    if strategy == '3费档次':
+        return _check_3_cost_strategy(hand_costs)
+
+    return []
+
+
+def _check_3_cost_strategy(hand_costs):
+    """
+    检查3费档次策略
+    条件：前三张牌组合为[1,2,3]，否则前2张必须有一张是3费牌
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    front_three = sorted(hand_costs[:3])
+
+    # 检查是否满足[1,2,3]组合
+    if front_three == [1, 2, 3]:
+        logger.info("满足3费档次最优组合[1,2,3]，保留所有牌")
+        return []
+
+    # 统计3费牌数量
+    cost_3_count = hand_costs.count(3)
+    # 统计2费牌数量
+    cost_2_count = hand_costs.count(2)
+    # 统计1费牌数量
+    cost_1_count = hand_costs.count(1)
+
+    # 3费牌位置
+    cost_3_positions = [i for i, value in enumerate(hand_costs) if value == 3]
+    # 2费牌位置
+    cost_2_positions = [i for i, value in enumerate(hand_costs) if value == 2]
+    # 1费牌位置
+    cost_1_positions = [i for i, value in enumerate(hand_costs) if value == 1]
+
+    # 3费牌过多处理
+    if cost_3_count == 4:
+        # 3费牌=4张：前两张都更换
+        logger.info("3费牌过多(4张)，替换前两张牌")
+        return [0, 1]
+
+    if cost_3_count == 3:
+        # 3费牌=3张：更换最右的3费牌,如果非3费牌费用高于3,也一起换掉
+        not_3_pos = [i for i in [0,1,2,3] if i not in cost_3_positions][0]
+        if hand_costs[not_3_pos] > 3:
+            logger.info(f"3费牌过多(3张)，替换第{cost_3_positions[-1]+1}张牌,同时替换一张{hand_costs[not_3_pos]}费牌")
+            return [cost_3_positions[-1], not_3_pos]
+        else:
+            logger.info(f"3费牌过多(3张)，替换第{cost_3_positions[-1]+1}张牌")
+            return [cost_3_positions[-1]]
+
+    # 2费牌过多处理
+    if cost_2_count == 4:
+        # 2费牌=4张：更换前两张2费牌
+        logger.info("2费牌过多(4张)，替换前两张2费牌")
+        return [0, 1]
+
+    if cost_2_count == 3:
+        # 2费牌=3张：更换最左的2费牌,如果非2费牌费用高于3,也一起换掉
+        not_2_pos = [i for i in [0,1,2,3] if i not in cost_2_positions][0]
+        if hand_costs[not_2_pos] > 3:
+            logger.info(f"2费牌过多(3张)，替换第{cost_2_positions[0]+1}张牌,同时替换一张{hand_costs[not_2_pos]}费牌")
+            return [cost_2_positions[0], not_2_pos]
+        else:
+            logger.info(f"2费牌过多(3张)，替换第{cost_2_positions[0]+1}张牌")
+            return [cost_2_positions[0]]
+
+    # 1费牌过多处理
+    if cost_1_count == 4:
+        # 1费牌=4张：更换前两张1费牌
+        logger.info("1费牌过多(4张)，替换前两张1费牌")
+        return [0, 1]
+
+    if cost_1_count == 3:
+        # 1费牌=3张：更换最左的1费牌,如果非1费牌费用高于3,也一起换掉
+        not_1_pos = [i for i in [0,1,2,3] if i not in cost_1_positions][0]
+        if hand_costs[not_1_pos] > 3:
+            logger.info(f"1费牌过多(3张)，替换第{cost_1_positions[0]+1}张牌,同时替换一张{hand_costs[not_1_pos]}费牌")
+            return [cost_1_positions[0], not_1_pos]
+        else:
+            logger.info(f"1费牌过多(3张)，替换第{cost_1_positions[0]+1}张牌")
+            return [cost_1_positions[0]]
+
+    combination_2x2 = []
+    if cost_3_count == 2 and cost_2_count == 2:
+        # 3费牌=2张，2费牌=2张：3费和2费牌都更换1张
+        combination_2x2.append(cost_3_positions[-1])
+        combination_2x2.append(cost_2_positions[1])
+        return combination_2x2
+    elif cost_3_count == 2 and cost_1_count == 2:
+        # 3费牌=2张，1费牌=2张：3费和1费牌都更换1张
+        combination_2x2.append(cost_3_positions[-1])
+        combination_2x2.append(cost_1_positions[1])
+        return combination_2x2
+    elif cost_2_count == 2 and cost_1_count == 2:
+        # 2费牌=2张，1费牌=2张：2费牌更换1张，1费牌更换1张
+        combination_2x2.append(cost_2_positions[1])
+        combination_2x2.append(cost_1_positions[1])
+        return combination_2x2
+
+    # 不满足3费档次条件
+    logger.info("不满足3费档次条件，需要调整手牌")
+
+    return [i for i, cost in enumerate(hand_costs) if cost > 3]
+
+
+def _check_4_cost_strategy(hand_costs):
+    """
+    检查4费档次策略
+    条件：组合[1,2,3,4]，否则前三张为[2,3,4]或[2,2,4]
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    sorted_hand = sorted(hand_costs)
+
+    # 检查是否满足[1,2,3,4]组合
+    if sorted_hand == [1, 2, 3, 4]:
+        logger.info("满足4费档次最优组合[1,2,3,4]，保留所有牌")
+        return []
+
+    # 检查前三张是否为[2,3,4]或[2,2,4]
+    front_three = sorted(set(hand_costs))
+    # 位置2、3均为4费
+    if hand_costs[1] == 4 and hand_costs[2] == 4:
+        if hand_costs == [2, 3, 4] or hand_costs == [2, 4]:
+            logger.info(f"组合[{sorted(hand_costs)}符合4费档次要求")
+            # 无需换牌
+            return []
+    # 位置1、2均为4费
+    if hand_costs[0] == 4 or hand_costs[1] == 4:
+        if sorted(front_three[:3]) == [2, 3, 4] or sorted(hand_costs[:3]) == [2, 2, 4]:
+            logger.info(f"组合{hand_costs}符合4费档次要求")
+            # 替换大于4费的牌
+            return [i for i, cost in enumerate(hand_costs) if cost > 4]
+    # 位置3为4费
+    if hand_costs[2] == 4:
+        if sorted(hand_costs[:3]) == [2, 3, 4] or sorted(hand_costs[:3]) == [2, 2, 4]:
+            logger.info(f"组合{hand_costs}符合4费档次要求")
+            # 替换大于4费的牌
+            return [i for i, cost in enumerate(hand_costs) if cost > 4]
+
+    # 不满足4费档次条件
+    logger.info("不满足4费档次条件")
+    return None
+
+
+def _check_5_cost_strategy(hand_costs):
+    """
+    检查5费档次策略
+    优先级：[2,3,4,5] > [2,3,3,5] > [2,2,3,5] > [2,2,2,5]
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    sorted_hand = sorted(hand_costs)
+
+    # 定义5费档次的优先组合
+    preferred_combinations = [
+        [2, 3, 4, 5],
+        [2, 3, 3, 5],
+        [2, 2, 3, 5],
+        [2, 2, 2, 5]
+    ]
+
+    for i, combination in enumerate(preferred_combinations):
+        if sorted_hand == combination:
+            logger.info(f"满足5费档次组合{combination}（优先级{i+1}），保留所有牌")
+            return []
+
+    logger.info("不满足5费档次任何组合")
+    return None
+
+
 def human_like_drag(u2_device, x1, y1, x2, y2, duration=None):
     """用一次swipe实现拟人拖动，兼容 uiautomator2 设备，强制参数合法"""
     import random
@@ -1369,4 +1602,4 @@ def human_like_drag(u2_device, x1, y1, x2, y2, duration=None):
         except Exception:
             duration = 0.02
         duration = max(0.05, min(1.0, duration))  # 限制拖动时长在0.05~1秒
-    u2_device.swipe(sx, sy, ex, ey, duration) 
+    u2_device.swipe(sx, sy, ex, ey, duration)

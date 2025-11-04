@@ -39,7 +39,8 @@
         "human_like_drag_duration_range": [
             0.3,
             0.6
-        ]
+        ],
+        "card_replacement_strategy": "4费档次"
     },
     "ui": {
         "notification_enabled": true,
@@ -68,17 +69,11 @@
         "须臾剑士": {
             "priority": 1
         },
-        "三将姬的乱击": {
-            "priority": 3
-        },
         "信念腿法兰德尔": {
             "priority": 2
         },
         "勇猛的鲁米那斯枪士": {
             "priority": 2
-        },
-        "异端武士": {
-            "priority": 3
         },
         "决心之辉龙亚瑟": {
             "priority": 5
@@ -87,9 +82,6 @@
             "priority": 1
         },
         "常在战场景光": {
-            "priority": 2
-        },
-        "瓦路兹": {
             "priority": 2
         },
         "迷茫的狮子莫德雷德": {
@@ -102,9 +94,6 @@
             "priority": 2
         },
         "雷维翁的迅番阿尔贝尔": {
-            "priority": 1
-        },
-        "小栗帽": {
             "priority": 1
         },
         "触手撕咬": {
@@ -133,11 +122,13 @@
         "雷维翁的迅番阿尔贝尔": {
             "priority": 1
         },
-        "小栗帽": {
-            "priority": 1
-        },
         "人马骑士": {
             "priority": 1
         }
+    },
+    "card_priority": {
+        "0_烈绝的灭牙": 1,
+        "0_爱绝的飞翔": 50,
+        "0_绝叫的扩散": 50
     }
 }

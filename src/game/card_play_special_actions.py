@@ -22,13 +22,22 @@ SPECIAL_CARDS = {
     "蛇神之怒": {
         "target_type": "enemy_player"  # 目标类型：敌方玩家
     },
+    "威严的星晶骑士薇拉": {
+        "target_type": "double_enemy"  # 目标类型：双随从
+    },
     "命运黄昏奥丁": {
+        "target_type": "shield_or_highest_hp"  # 目标类型：护盾或最高血量
+    },
+    "安息的团结者": {
+        "target_type": "shield_or_highest_hp"  # 目标类型：护盾或最高血量
+    },
+    "小栗帽": {
         "target_type": "shield_or_highest_hp"  # 目标类型：护盾或最高血量
     },
     "触手撕咬": {
         "target_type": "enemy_player"  # 目标类型：敌方玩家
     },
-    "沉默的狙击手瓦路兹": {
+    "瓦路兹": {
         "target_type": "enemy_followers_hp_less_than_6"  # 目标类型：敌方随从血量小于6
     },
     "剑士的斩击": {
@@ -70,6 +79,8 @@ class CardPlaySpecialActions:
                 self._handle_enemy_player_target(card_name, center_x, center_y, target_x)
             elif target_type == 'shield_or_highest_hp':
                 self._handle_shield_or_highest_hp_target(card_name, center_x, center_y, target_x)
+            elif target_type == 'double_enemy':
+                self._handle_double_destroy(card_name, center_x, center_y, target_x)
             elif target_type == 'enemy_followers_hp_less_than_6':
                 self._handle_enemy_followers_hp_less_than_6_target(card_name, center_x, center_y, target_x)
             elif target_type == 'scan_our_follower_to_choose':
@@ -99,6 +110,9 @@ class CardPlaySpecialActions:
             self.device_state.logger.info(f"检测到打出{card_name}，增加3点费用")
             # 这里需要在调用方处理费用增加，我们通过返回值来通知
             self._extra_cost_bonus = 3
+        elif card_name == "纯白圣女贞德":
+            time.sleep(5)
+            self.device_state.logger.info(f"检测到打出{card_name}，等待5s")
         else:
             self._extra_cost_bonus = 0
         
@@ -130,13 +144,81 @@ class CardPlaySpecialActions:
         self.device_state.logger.info(f"检测到{card_name}，划出卡牌后选择敌方玩家目标")
         # 划出卡牌
         human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
-        time.sleep(0.7)  # 等待
+        time.sleep(0.8)  # 等待
         
         enemy_x = DEFAULT_ATTACK_TARGET[0] + random.randint(-DEFAULT_ATTACK_RANDOM, DEFAULT_ATTACK_RANDOM)
         enemy_y = DEFAULT_ATTACK_TARGET[1] + random.randint(-DEFAULT_ATTACK_RANDOM, DEFAULT_ATTACK_RANDOM)
         self.device_state.u2_device.click(enemy_x, enemy_y)
         self.device_state.logger.info(f"{card_name}选择敌方玩家目标: ({enemy_x}, {enemy_y})")
-        time.sleep(0.1)  # 等待0.1秒
+        time.sleep(0.5)  # 等待0.1秒
+    
+    def _handle_double_destroy(self, card_name, center_x, center_y, target_x):
+        self.device_state.logger.info(f"检测到{card_name}，执行两次破坏") 
+        # 检测敌方随从
+        screenshot = self.device_state.take_screenshot()
+        if screenshot:
+            enemy_followers = self._scan_enemy_followers(screenshot)
+            if enemy_followers:
+                self.device_state.logger.info("检测到敌方随从，划出卡牌后破坏血量最高的敌方随从")
+                # 划出卡牌
+                human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
+                time.sleep(0.9)  # 等待0.2秒
+                # 找出血量最高的随从
+                # 找出血量最高的随从（若>1个则取前两个并依次点击）
+                try:
+                    def _hp(v):
+                        try:
+                            return int(v)
+                        except Exception:
+                            return 0
+
+                    # 按血量从高到低排序
+                    sorted_followers = sorted(
+                        enemy_followers,
+                        key=lambda t: _hp(t[3]),
+                        reverse=True
+                    )
+                    raw_debug = [(int(f[0]), int(f[1]), _hp(f[3])) for f in enemy_followers]
+                    self.device_state.logger.info(f"敌方随从（原始顺序）：{raw_debug}")
+
+                    # 只一个：保持原逻辑
+                    if len(sorted_followers) == 1:
+                        fx, fy, _, _ = sorted_followers[0]
+                        fx, fy = int(fx), int(fy)
+                        self.device_state.u2_device.click(fx, fy)
+                        self.device_state.logger.info(f"点击血量最高的敌方随从位置: ({fx}, {fy})")
+
+                    else:
+                        # 多个：取前两个“不同坐标”的目标
+                        targets = []
+                        seen = set()
+                        for f in sorted_followers:
+                            fx, fy = int(f[0]), int(f[1])
+                            if (fx, fy) in seen:
+                                continue
+                            targets.append((fx, fy))
+                            seen.add((fx, fy))
+                            if len(targets) == 2:
+                                break
+
+                        # 兜底：万一只有一个唯一坐标也继续点击一次
+                        for idx, (fx, fy) in enumerate(targets, 1):
+                            self.device_state.u2_device.click(fx, fy)
+                            self.device_state.logger.info(f"第{idx}次点击目标随从位置: ({fx}, {fy})")
+                            time.sleep(0.35)  # 两次点击之间稍作间隔
+
+                    time.sleep(2.7)
+                except Exception as e:
+                    self.device_state.logger.warning(f"选择敌方随从时出错: {str(e)}")
+                    time.sleep(0.6)
+            else:
+                self.device_state.logger.info("未检测到敌方随从，不消耗能量点，直接返回")
+                # 不划出卡牌，不消耗能量点
+                return False
+        else:
+            self.device_state.logger.warning("无法获取截图，不消耗能量点，直接返回")
+            return False                       
+        
     
     def _handle_shield_or_highest_hp_target(self, card_name, center_x, center_y, target_x):
         """处理优先破坏护盾，否则选择血量最高的敌方随从"""
@@ -149,7 +231,7 @@ class CardPlaySpecialActions:
             self.device_state.logger.info("检测到护盾，划出卡牌后破坏护盾随从")
             # 划出卡牌
             human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
-            time.sleep(0.5)  # 等待
+            time.sleep(0.9)  # 等待
             
             # 点击护盾随从（选择第一个护盾）
             shield_x, shield_y = shield_targets[0]
@@ -159,7 +241,7 @@ class CardPlaySpecialActions:
             self.device_state.logger.info("未检测到护盾，尝试检测血量最高的敌方随从")
             # 划出卡牌
             human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
-            time.sleep(0.2)  # 等待0.2秒
+            time.sleep(0.9)  # 等待0.2秒
             
             # 检测敌方随从
             screenshot = self.device_state.take_screenshot()
@@ -185,15 +267,15 @@ class CardPlaySpecialActions:
                     if can_choosetargets:
                         for pos in can_choosetargets:
                             self.device_state.u2_device.click(pos[0], pos[1])
-                            time.sleep(0.1)
+                            time.sleep(0.3)
 
                         self.device_state.u2_device.click(645+random.randint(-3, 3),232+random.randint(-2, 2))
-                        time.sleep(0.1)
+                        time.sleep(0.3)
                         self.device_state.u2_device.click(player_x+random.randint(-3, 3), player_y+random.randint(-2, 2))
                         self.device_state.logger.info(f"选择了一个可破坏目标(护符之类)")
                     else:
                         self.device_state.u2_device.click(645+random.randint(-3, 3),232+random.randint(-2, 2))
-                        time.sleep(0.1)
+                        time.sleep(0.3)
                         self.device_state.u2_device.click(player_x+random.randint(-3, 3), player_y+random.randint(-2, 2))
                         self.device_state.logger.info("未检测到可破坏目标")
 
@@ -211,7 +293,7 @@ class CardPlaySpecialActions:
             self.device_state.logger.info("检测到护盾，划出卡牌后破坏护盾随从")
             # 划出卡牌
             human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
-            time.sleep(0.5)  # 等待
+            time.sleep(0.9)  # 等待
             
             # 点击护盾随从（选择第一个护盾）
             shield_x, shield_y = shield_targets[0]
@@ -228,7 +310,7 @@ class CardPlaySpecialActions:
                     self.device_state.logger.info("检测到敌方随从，划出卡牌后破坏血量最高的敌方随从")
                     # 划出卡牌
                     human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
-                    time.sleep(0.2)  # 等待0.2秒
+                    time.sleep(0.9)  # 等待0.2秒
                     
                     # 找出血量最高的随从
                     try:
@@ -260,13 +342,13 @@ class CardPlaySpecialActions:
             if valid_targets:
                 # 划出该手牌
                 human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
-                time.sleep(0.2)
+                time.sleep(0.9)
                 
                 # 选择血量最大的
                 target = max(valid_targets, key=lambda f: int(f[3]))
                 self.device_state.logger.info(f"[划出{card_name}]，点击血量最大敌方随从: ({target[0]}, {target[1]}) HP={target[3]}")
                 self.device_state.u2_device.click(int(target[0]), int(target[1]))
-                time.sleep(0.2)
+                time.sleep(0.5)
             else:
                 # 没有血量小于5的随从，检查是否有其他敌方随从
                 if enemy_followers:
@@ -274,7 +356,7 @@ class CardPlaySpecialActions:
                     self.device_state.logger.info(f"划出[{card_name}]，未检测到血量小于5的敌方随从，选择血量最大的敌方随从")
                     # 划出该手牌
                     human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
-                    time.sleep(0.3)
+                    time.sleep(0.9)
                     
                     # 选择血量最大的敌方随从
                     try:
@@ -286,17 +368,17 @@ class CardPlaySpecialActions:
                         self.device_state.logger.info(f"划出[{card_name}]，点击血量最大的敌方随从: ({enemy_x}, {enemy_y}) HP={hp}")
                     except Exception as e:
                         self.device_state.logger.warning(f"划出[{card_name}]，选择敌方随从时出错: {str(e)}")
-                    time.sleep(0.2)
+                    time.sleep(0.5)
                 else:
                     # 一个敌方随从都没有，点击指定位置
                     self.device_state.logger.info(f"划出[{card_name}]，未检测到任何敌方随从")
                     # 划出该手牌
                     human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
-                    time.sleep(0.2)
+                    time.sleep(0.9)
                     
                     # 点击指定位置 (611, 227)
                     self.device_state.u2_device.click(611+random.randint(-3, 3), 227+random.randint(-2, 2))
-                    time.sleep(0.2)
+                    time.sleep(0.5)
     
     def _default_card_play(self, center_x, center_y, target_x):
         """默认卡牌打出"""

@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTextEdit, QFrame, QStackedWidget, QLineEdit, QGroupBox,
     QGridLayout, QScrollArea, QSizePolicy, QCheckBox, QMessageBox, QComboBox,
-    QMenu, QAction, QFileDialog
+    QMenu, QAction, QFileDialog, QInputDialog
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, pyqtSlot
 from PyQt5.QtGui import QFont, QPixmap, QPalette, QBrush, QColor, QIcon, QFontDatabase, QPainter, QPen
@@ -97,37 +97,67 @@ class ConfigPage(QWidget):
         
         main_layout.addWidget(drag_group)
         
-        # 卡片优先级设置
-        card_group = QGroupBox("卡片优先级设置")
-        card_layout = QVBoxLayout(card_group)
+        # 自动重启设置
+        restart_group = QGroupBox("自动重启设置 (防止游戏卡死)")
+        restart_layout = QGridLayout(restart_group)
         
-        # 说明
-        desc_label = QLabel("为卡组中的卡片设置优先级 数字越大优先级越低，优先度上限是999(默认所有卡牌999)")
-        desc_label.setStyleSheet("font-size: 12px; color: #AACCFF;")
-        card_layout.addWidget(desc_label)
+        # 获取当前自动重启设置
+        auto_restart_config = self.config_data.get("auto_restart", {})
+        self.auto_restart_enabled = auto_restart_config.get("enabled", True)
+        self.output_timeout = auto_restart_config.get("output_timeout", 300) // 60  # 转换为分钟
         
-        # 滚动区域
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        self.scroll_content = QWidget()  # 保存为实例变量
-        self.scroll_layout = QVBoxLayout(self.scroll_content)
-        scroll_area.setWidget(self.scroll_content)
+        # 启用/禁用复选框
+        self.restart_enabled_checkbox = QCheckBox("启用自动重启功能")
+        self.restart_enabled_checkbox.setChecked(self.auto_restart_enabled)
+        self.restart_enabled_checkbox.setStyleSheet("color: #FFFFFF;")
+        restart_layout.addWidget(self.restart_enabled_checkbox, 0, 0, 1, 2)
         
-        # 设置滚动区域样式
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                background-color: transparent;
-                border: none;
-            }
-            QWidget#ScrollContent {
-                background-color: transparent;
-            }
-        """)
-        self.scroll_content.setObjectName("ScrollContent")
+        # 无操作重启时间输入
+        restart_layout.addWidget(QLabel("无操作自动重启时间 (分钟):"), 1, 0)
+        self.restart_time_input = QLineEdit(str(self.output_timeout))
+        self.restart_time_input.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
+        self.restart_time_input.setEnabled(self.auto_restart_enabled)
+        restart_layout.addWidget(self.restart_time_input, 1, 1)
         
-        card_layout.addWidget(scroll_area)
-        main_layout.addWidget(card_group)
+        # 连接复选框状态变化信号
+        self.restart_enabled_checkbox.stateChanged.connect(self.on_restart_enabled_changed)
         
+        # 添加说明
+        restart_layout.addWidget(QLabel("说明: 设置无操作后自动重启游戏的时间间隔，建议设置在3-10分钟之间"), 2, 0, 1, 2)
+        
+        main_layout.addWidget(restart_group)
+        
+        # 换牌策略设置
+        strategy_group = QGroupBox("换牌策略设置")
+        strategy_layout = QVBoxLayout(strategy_group)
+        
+        # 策略选择
+        strategy_selection_layout = QHBoxLayout()
+        strategy_selection_layout.addWidget(QLabel("选择换牌策略:"))
+        self.strategy_combo = QComboBox()
+        self.strategy_combo.addItems(["3费档次", "4费档次", "5费档次"])
+        self.strategy_combo.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
+        # 设置当前选中的策略
+        current_strategy = self.config_data.get("game", {}).get("card_replacement_strategy", "3费档次")
+        index = self.strategy_combo.findText(current_strategy)
+        if index >= 0:
+            self.strategy_combo.setCurrentIndex(index)
+        strategy_selection_layout.addWidget(self.strategy_combo)
+        
+        # 帮助按钮
+        self.strategy_help_btn = QPushButton("帮助")
+        self.strategy_help_btn.clicked.connect(self.show_strategy_help)
+        strategy_selection_layout.addWidget(self.strategy_help_btn)
+        
+        strategy_layout.addLayout(strategy_selection_layout)
+        
+        # 添加说明
+        strategy_desc = QLabel("说明: 根据费用档次策略自动换牌，确保关键回合能准时展开")
+        strategy_desc.setStyleSheet("font-size: 12px; color: #AACCFF;")
+        strategy_layout.addWidget(strategy_desc)
+        
+        main_layout.addWidget(strategy_group)
+
         # 操作按钮
         btn_layout = QHBoxLayout()
         self.save_btn = QPushButton("保存设置")
@@ -142,70 +172,62 @@ class ConfigPage(QWidget):
         
         main_layout.addLayout(btn_layout)
         
-        # 加载卡片优先级设置
-        self.load_card_priority_settings(self.scroll_content)
+    # 卡牌优先级已拆分至独立页面 CardPriorityPage；此处不再直接加载卡片优先级
     
+    def on_restart_enabled_changed(self):
+        """处理自动重启功能启用/禁用状态变化"""
+        self.restart_time_input.setEnabled(self.restart_enabled_checkbox.isChecked())
+        
     def get_current_config(self):
         """获取当前配置的JSON数据"""
+        # 仅返回通用参数（卡牌优先级已拆分至 CardPriorityPage，完整配置可从磁盘读取）
         config = {
             "game": {
                 "human_like_drag_duration_range": [
                     float(self.min_drag_input.text()),
                     float(self.max_drag_input.text())
                 ]
+            },
+            "auto_restart": {
+                "enabled": self.restart_enabled_checkbox.isChecked(),
+                "output_timeout": int(self.restart_time_input.text()) * 60,  # 转换为秒
+                "match_timeout": 900
             }
         }
-        
-        # 获取卡片优先级设置
-        high_priority_cards = {}
-        evolve_priority_cards = {}
-        
-        for card in self.card_widgets:
-            card_name = card["card_name"]
-            
-            play_priority_text = card["play_priority"].text().strip()
-            if play_priority_text:
-                high_priority_cards[card_name] = {
-                    "priority": int(play_priority_text)
-                }
-            
-            evolve_priority_text = card["evolve_priority"].text().strip()
-            if evolve_priority_text:
-                evolve_priority_cards[card_name] = {
-                    "priority": int(evolve_priority_text)
-                }
-        
-        if high_priority_cards:
-            config["high_priority_cards"] = high_priority_cards
-        if evolve_priority_cards:
-            config["evolve_priority_cards"] = evolve_priority_cards
-        
         return config
     
     def refresh_card_priority(self):
         """刷新卡片优先级显示"""
-        # 保存当前输入的优先级值
-        current_settings = {}
-        for card in self.card_widgets:
-            play_priority = card["play_priority"].text().strip()
-            evolve_priority = card["evolve_priority"].text().strip()
-            current_settings[card["card_name"]] = {
-                "play": play_priority,
-                "evolve": evolve_priority
-            }
-        
-        # 重新加载卡片
-        self.load_card_priority_settings(self.scroll_content)
-        
-        # 恢复之前输入的优先级值
-        for card in self.card_widgets:
-            card_name = card["card_name"]
-            if card_name in current_settings:
-                settings = current_settings[card_name]
-                if settings["play"]:
-                    card["play_priority"].setText(settings["play"])
-                if settings["evolve"]:
-                    card["evolve_priority"].setText(settings["evolve"])
+        # 已迁移到 CardPriorityPage，保留空实现以避免外部直接调用时报错
+        return
+    
+    def show_strategy_help(self):
+        """显示换牌策略说明"""
+        help_text = """
+换牌策略说明：
+
+【3费档次】
+• 最优：前三张牌组合为 [1,2,3]
+• 次优：牌序为2，3
+• 目标：确保3费时能准时打出
+
+【4费档次】（向下兼容3费档次）
+• 最优：四张牌组合为 [1,2,3,4]
+• 次优：牌序为 [2,3,4] 或 [2,2,4]
+• 目标：确保4费时能有效展开
+
+【5费档次】（向下兼容4费、3费档次）
+• 优先级组合（从高到低）：
+[2,3,4,5] > [2,3,3,5] > [2,2,3,5] > [2,2,2,5]
+• 目标：确保5费时能打出关键牌
+
+注意：高档次策略条件不满足时会自动检查低档次策略
+"""
+        msg = QMessageBox()
+        msg.setWindowTitle("换牌策略说明")
+        msg.setText(help_text)
+        msg.setIcon(QMessageBox.Information)
+        msg.exec_()
     
     def load_config(self):
         """加载配置文件"""
@@ -334,66 +356,53 @@ class ConfigPage(QWidget):
             QMessageBox.warning(self, "输入错误", f"拖拽时间设置错误: {str(e)}")
             return
         
-        # 准备卡片优先级设置
-        high_priority_cards = {}
-        evolve_priority_cards = {}
-        
-        # 处理每张卡片的优先级设置
-        for card in self.card_widgets:
-            card_name = card["card_name"]
+        # 验证并保存自动重启设置
+        try:
+            # 更新自动重启配置
+            if "auto_restart" not in self.config_data:
+                self.config_data["auto_restart"] = {}
             
-            # 处理出牌优先级
-            play_priority_text = card["play_priority"].text().strip()
-            if play_priority_text:
-                try:
-                    priority = int(play_priority_text)
-                    if priority < 0 or priority > 999:
-                        raise ValueError("优先级必须在0-999之间")
-                    high_priority_cards[card_name] = {"priority": priority}
-                except Exception as e:
-                    QMessageBox.warning(
-                        self, "输入错误", 
-                        f"卡片 '{card_name}' 的出牌优先级设置错误: {str(e)}"
-                    )
-                    return
+            self.config_data["auto_restart"]["enabled"] = self.restart_enabled_checkbox.isChecked()
             
-            # 处理进化优先级
-            evolve_priority_text = card["evolve_priority"].text().strip()
-            if evolve_priority_text:
-                try:
-                    priority = int(evolve_priority_text)
-                    if priority < 0 or priority > 999:
-                        raise ValueError("优先级必须在0-999之间")
-                    evolve_priority_cards[card_name] = {"priority": priority}
-                except Exception as e:
-                    QMessageBox.warning(
-                        self, "输入错误", 
-                        f"卡片 '{card_name}' 的进化优先级设置错误: {str(e)}"
-                    )
-                    return
+            if self.restart_enabled_checkbox.isChecked():
+                restart_time = int(self.restart_time_input.text())
+                if restart_time < 1 or restart_time > 60:
+                    raise ValueError("自动重启时间必须在1-60分钟之间")
+                self.config_data["auto_restart"]["output_timeout"] = restart_time * 60  # 转换为秒
+            
+            # 保持match_timeout不变（15分钟）
+            if "match_timeout" not in self.config_data["auto_restart"]:
+                self.config_data["auto_restart"]["match_timeout"] = 900
+        except Exception as e:
+            QMessageBox.warning(self, "输入错误", f"自动重启设置错误: {str(e)}")
+            return
         
-        # 更新配置数据
-        if high_priority_cards:
-            self.config_data["high_priority_cards"] = high_priority_cards
-        elif "high_priority_cards" in self.config_data:
-            del self.config_data["high_priority_cards"]
+        # 保存换牌策略设置
+        strategy = self.strategy_combo.currentText()
+        self.config_data["game"]["card_replacement_strategy"] = strategy
         
-        if evolve_priority_cards:
-            self.config_data["evolve_priority_cards"] = evolve_priority_cards
-        elif "evolve_priority_cards" in self.config_data:
-            del self.config_data["evolve_priority_cards"]
-        
-        # 保存到文件
+        # 注意：卡牌优先级设置已迁移到独立页面 CardPriorityPage，由它单独保存该部分配置。
+        # 这里只保存与参数设置相关的其他字段（如 'game' 和 'auto_restart'）。
+        # 将更新写入磁盘（合并现有配置）。
         config_path = os.path.join(get_exe_dir(), "config.json")
         try:
+            # 读取现有配置以保留其它部分（例如 high_priority_cards）
+            existing = {}
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    try:
+                        existing = json.load(f)
+                    except Exception:
+                        existing = {}
+
+            # 合并
+            existing.update(self.config_data)
             with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(self.config_data, f, indent=4, ensure_ascii=False)
-            
+                json.dump(existing, f, indent=4, ensure_ascii=False)
             QMessageBox.information(self, "成功", "配置已保存！")
             self.parent.log_output.append("[配置] 参数设置已更新")
         except Exception as e:
             QMessageBox.warning(self, "保存失败", f"保存配置文件时出错: {str(e)}")
-    
     def refresh_config_display(self):
         """刷新整个配置页面的显示"""
         # 重新加载配置数据
@@ -406,8 +415,8 @@ class ConfigPage(QWidget):
         self.min_drag_input.setText(str(drag_range[0]))
         self.max_drag_input.setText(str(drag_range[1]))
         
-        # 刷新卡片优先级设置
-        self.load_card_priority_settings(self.scroll_content)
+        # 卡片优先级已移至独立页面，主配置页不再直接刷新该部分
+        return
 
 class CardSelectPage(QWidget):
     def __init__(self, parent=None):
@@ -433,6 +442,30 @@ class CardSelectPage(QWidget):
         title_label.setStyleSheet("font-size: 20px; color: #88AAFF; font-weight: bold;")
         title_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(title_label)
+        
+        # 加载已保存卡组下拉框
+        deck_layout = QHBoxLayout()
+        deck_layout.addWidget(QLabel("已保存卡组:"))
+        self.saved_decks_combo = QComboBox()
+        self.saved_decks_combo.setStyleSheet("""
+            QComboBox {
+                background-color: rgba(80, 80, 120, 180);
+                color: white;
+                border: 1px solid #5A5A8F;
+                border-radius: 5px;
+                padding: 5px;
+                min-width: 150px;
+            }
+            QComboBox:hover {
+                background-color: rgba(90, 90, 140, 180);
+            }
+        """)
+        self.saved_decks_combo.addItem("选择卡组", None)
+        self.saved_decks_combo.currentIndexChanged.connect(self.load_saved_deck)
+        deck_layout.addWidget(self.saved_decks_combo)
+        
+        self.refresh_saved_decks()  # 加载已保存的卡组列表
+        main_layout.addLayout(deck_layout)
 
         # 搜索框和分类选择
         search_layout = QHBoxLayout()
@@ -524,11 +557,14 @@ class CardSelectPage(QWidget):
         btn_layout = QHBoxLayout()
         self.save_btn = QPushButton("保存卡组")
         self.save_btn.clicked.connect(self.save_selection)
+        self.save_as_btn = QPushButton("另存为...")
+        self.save_as_btn.clicked.connect(self.save_deck_as)
         self.back_btn = QPushButton("返回主界面")
         self.back_btn.clicked.connect(lambda: self.parent.stacked_widget.setCurrentIndex(0))
         
         btn_layout.addStretch()
         btn_layout.addWidget(self.save_btn)
+        btn_layout.addWidget(self.save_as_btn)
         btn_layout.addWidget(self.back_btn)
         btn_layout.addStretch()
         
@@ -832,7 +868,16 @@ class CardSelectPage(QWidget):
         target_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
         os.makedirs(target_dir, exist_ok=True)
         
-        # 不清空目标文件夹，只添加新卡片
+        # 清空目标文件夹，然后添加所有选中的卡片
+        for file in os.listdir(target_dir):
+            file_path = os.path.join(target_dir, file)
+            try:
+                if os.path.isfile(file_path):
+                    os.unlink(file_path)
+            except Exception as e:
+                print(f"删除文件失败: {file_path} - {e}")
+        
+        # 复制选中的卡片
         success_count = 0
         for card_file in self.selected_cards:
             # 查找卡片完整路径
@@ -844,25 +889,313 @@ class CardSelectPage(QWidget):
             
             if src and os.path.exists(src):
                 dst = os.path.join(target_dir, card_file)
-                # 如果文件已存在，跳过
-                if os.path.exists(dst):
-                    continue
                 try:
                     shutil.copy2(src, dst)
                     success_count += 1
                 except Exception as e:
                     print(f"复制文件失败: {src} -> {dst} - {e}")
         
-        if success_count > 0:
-            QMessageBox.information(self, "成功", f"已添加 {success_count} 张卡片到卡组！")
-            self.parent.log_output.append(f"[卡组] 已添加 {success_count} 张卡片")
+            if success_count > 0:
+                QMessageBox.information(self, "成功", f"已保存 {success_count} 张卡片到卡组！")
+                self.parent.log_output.append(f"[卡组] 已保存 {success_count} 张卡片")
+
+                # 刷新卡牌优先级页面的卡片显示（迁移后）
+                if hasattr(self.parent, 'card_priority_page'):
+                    self.parent.card_priority_page.refresh_card_priority()
+
+                # 刷新我的卡组页面的卡片显示
+                if hasattr(self.parent, 'my_deck_page'):
+                    self.parent.my_deck_page.load_deck()
+    
+
+    
+    def save_current_deck(self):
+        """保存当前卡组"""
+        deck_name = self.save_deck_name.text().strip()
+        if not deck_name:
+            QMessageBox.warning(self, "警告", "请输入卡组名称！")
+            return
+        
+        # 获取当前卡组中的卡片
+        card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+        if not os.path.exists(card_dir):
+            QMessageBox.warning(self, "警告", "当前卡组为空！")
+            return
+        
+        card_files = [f for f in os.listdir(card_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        if not card_files:
+            QMessageBox.warning(self, "警告", "当前卡组为空！")
+            return
+        
+        try:
+            # 创建保存卡组的目录
+            decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+            os.makedirs(decks_dir, exist_ok=True)
             
-            # 刷新参数设置页面的卡片显示
-            if hasattr(self.parent, 'config_page'):
-                self.parent.config_page.refresh_card_priority()
-            # 刷新自己卡组页面
-            if hasattr(self.parent, 'my_deck_page'):
-                self.parent.my_deck_page.load_deck()
+            # 构建卡组数据
+            deck_data = {
+                "name": deck_name,
+                "cards": card_files,
+                "timestamp": int(time.time())
+            }
+            
+            # 保存到文件
+            deck_file = os.path.join(decks_dir, f"{deck_name}.json")
+            with open(deck_file, 'w', encoding='utf-8') as f:
+                json.dump(deck_data, f, ensure_ascii=False, indent=2)
+            
+            QMessageBox.information(self, "成功", f"卡组 '{deck_name}' 已保存！")
+            self.parent.log_output.append(f"[卡组] 已保存卡组 '{deck_name}'")
+            
+            # 清空输入框
+            self.save_deck_name.clear()
+            
+            # 刷新已保存卡组列表
+            self.refresh_saved_decks()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"保存卡组失败: {str(e)}")
+            self.parent.log_output.append(f"[卡组] 保存卡组失败: {str(e)}")
+    
+    def load_selected_deck(self):
+        """加载选中的已保存卡组"""
+        deck_file = self.saved_decks_combo.itemData(self.saved_decks_combo.currentIndex())
+        if not deck_file:
+            QMessageBox.warning(self, "警告", "请选择要加载的卡组！")
+            return
+        
+        try:
+            decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+            deck_path = os.path.join(decks_dir, deck_file)
+            
+            with open(deck_path, 'r', encoding='utf-8') as f:
+                deck_data = json.load(f)
+            
+            # 清空当前卡组
+            card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+            for file in os.listdir(card_dir):
+                file_path = os.path.join(card_dir, file)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                except Exception as e:
+                    print(f"删除文件失败: {file_path} - {e}")
+            
+            # 复制卡片到当前卡组
+            source_dir = os.path.join(get_exe_dir(), "quanka")
+            success_count = 0
+            for card_file in deck_data.get('cards', []):
+                # 查找卡片在quanka目录中的路径
+                src = None
+                for root, _, files in os.walk(source_dir):
+                    if card_file in files:
+                        src = os.path.join(root, card_file)
+                        break
+                
+                if src and os.path.exists(src):
+                    dst = os.path.join(card_dir, card_file)
+                    try:
+                        shutil.copy2(src, dst)
+                        success_count += 1
+                    except Exception as e:
+                        print(f"复制文件失败: {src} -> {dst} - {e}")
+            
+            if success_count > 0:
+                # 重新加载卡组显示
+                self.load_deck()
+                
+                QMessageBox.information(self, "成功", f"已加载卡组 '{deck_data.get('name')}'，共 {success_count} 张卡片")
+                self.parent.log_output.append(f"[卡组] 已加载卡组 '{deck_data.get('name')}'")
+                
+                # 刷新卡牌优先级页面（已迁移）
+                if hasattr(self.parent, 'card_priority_page'):
+                    self.parent.card_priority_page.refresh_card_priority()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"加载卡组失败: {str(e)}")
+            self.parent.log_output.append(f"[卡组] 加载卡组失败: {str(e)}")
+        
+        try:
+            decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+            deck_path = os.path.join(decks_dir, deck_file)
+            
+            with open(deck_path, 'r', encoding='utf-8') as f:
+                deck_data = json.load(f)
+            
+            # 清空当前卡组
+            card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+            for file in os.listdir(card_dir):
+                file_path = os.path.join(card_dir, file)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                except Exception as e:
+                    print(f"删除文件失败: {file_path} - {e}")
+            
+            # 复制卡片到当前卡组
+            source_dir = os.path.join(get_exe_dir(), "quanka")
+            success_count = 0
+            for card_file in deck_data.get('cards', []):
+                # 查找卡片在quanka目录中的路径
+                src = None
+                for root, _, files in os.walk(source_dir):
+                    if card_file in files:
+                        src = os.path.join(root, card_file)
+                        break
+                
+                if src and os.path.exists(src):
+                    dst = os.path.join(card_dir, card_file)
+                    try:
+                        shutil.copy2(src, dst)
+                        success_count += 1
+                    except Exception as e:
+                        print(f"复制文件失败: {src} -> {dst} - {e}")
+            
+            if success_count > 0:
+                # 重新加载卡组显示
+                self.load_deck()
+                
+                QMessageBox.information(self, "成功", f"已加载卡组 '{deck_data.get('name')}'，共 {success_count} 张卡片")
+                self.parent.log_output.append(f"[卡组] 已加载卡组 '{deck_data.get('name')}'")
+                
+                # 刷新卡牌优先级页面（已迁移）
+                if hasattr(self.parent, 'card_priority_page'):
+                    self.parent.card_priority_page.refresh_card_priority()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"加载卡组失败: {str(e)}")
+            self.parent.log_output.append(f"[卡组] 加载卡组失败: {str(e)}")
+    
+    def delete_selected_deck(self):
+        """删除选中的已保存卡组"""
+        deck_file = self.saved_decks_combo.itemData(self.saved_decks_combo.currentIndex())
+        deck_name = self.saved_decks_combo.currentText()
+        
+        if not deck_file:
+            QMessageBox.warning(self, "警告", "请选择要删除的卡组！")
+            return
+        
+        reply = QMessageBox.question(
+            self, '确认删除',
+            f'确定要删除卡组 "{deck_name}" 吗？此操作不可撤销！',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+                deck_path = os.path.join(decks_dir, deck_file)
+                
+                if os.path.exists(deck_path):
+                    os.remove(deck_path)
+                    
+                    QMessageBox.information(self, "成功", f"卡组 '{deck_name}' 已删除！")
+                    self.parent.log_output.append(f"[卡组] 已删除卡组 '{deck_name}'")
+                    
+                    # 刷新已保存卡组列表
+                    self.refresh_saved_decks()
+                    
+                    # 刷新我的卡组页面
+                    if hasattr(self.parent, 'my_deck_page'):
+                        self.parent.my_deck_page.refresh_saved_decks()
+                    
+            except Exception as e:
+                QMessageBox.warning(self, "错误", f"删除卡组失败: {str(e)}")
+                self.parent.log_output.append(f"[卡组] 删除卡组失败: {str(e)}")
+                
+    def save_deck_as(self):
+        """将当前选择的卡组另存为"""
+        if not self.selected_cards:
+            QMessageBox.warning(self, "警告", "请至少选择一张卡片！")
+            return
+        
+        # 获取卡组名称
+        deck_name, ok = QInputDialog.getText(self, "保存卡组", "请输入卡组名称:")
+        if not ok or not deck_name.strip():
+            return
+        
+        # 保存卡组
+        self.save_named_deck(deck_name.strip())
+        
+    def save_named_deck(self, deck_name):
+        """保存命名卡组"""
+        try:
+            # 创建保存卡组的目录
+            decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+            os.makedirs(decks_dir, exist_ok=True)
+            
+            # 构建卡组数据
+            deck_data = {
+                "name": deck_name,
+                "cards": self.selected_cards,
+                "timestamp": int(time.time())
+            }
+            
+            # 保存到文件
+            deck_file = os.path.join(decks_dir, f"{deck_name}.json")
+            with open(deck_file, 'w', encoding='utf-8') as f:
+                json.dump(deck_data, f, ensure_ascii=False, indent=2)
+            
+            QMessageBox.information(self, "成功", f"卡组 '{deck_name}' 已保存！")
+            self.parent.log_output.append(f"[卡组] 已保存卡组 '{deck_name}'")
+            
+            # 刷新已保存卡组列表
+            self.refresh_saved_decks()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"保存卡组失败: {str(e)}")
+            self.parent.log_output.append(f"[卡组] 保存卡组失败: {str(e)}")
+    
+    def refresh_saved_decks(self):
+        """刷新已保存卡组列表"""
+        self.saved_decks_combo.clear()
+        self.saved_decks_combo.addItem("选择卡组", None)
+        
+        decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+        if os.path.exists(decks_dir):
+            for file in os.listdir(decks_dir):
+                if file.endswith('.json'):
+                    deck_file = os.path.join(decks_dir, file)
+                    try:
+                        with open(deck_file, 'r', encoding='utf-8') as f:
+                            deck_data = json.load(f)
+                        self.saved_decks_combo.addItem(deck_data.get('name', file[:-5]), file)
+                    except Exception as e:
+                        print(f"读取卡组文件失败: {deck_file} - {e}")
+        
+        # 同时刷新MyDeckPage中的卡组列表
+        if hasattr(self.parent, 'my_deck_page'):
+            self.parent.my_deck_page.refresh_saved_decks()
+    
+    def load_saved_deck(self, index):
+        """加载选中的已保存卡组"""
+        deck_file = self.saved_decks_combo.itemData(index)
+        if not deck_file:
+            return
+        
+        try:
+            decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+            deck_path = os.path.join(decks_dir, deck_file)
+            
+            with open(deck_path, 'r', encoding='utf-8') as f:
+                deck_data = json.load(f)
+            
+            # 清空当前选择
+            self.selected_cards = []
+            
+            # 添加卡组中的卡片
+            for card_file in deck_data.get('cards', []):
+                self.selected_cards.append(card_file)
+            
+            # 刷新显示
+            self.display_page(self.current_page)
+            
+            QMessageBox.information(self, "成功", f"已加载卡组 '{deck_data.get('name')}'")
+            self.parent.log_output.append(f"[卡组] 已加载卡组 '{deck_data.get('name')}'")
+            
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"加载卡组失败: {str(e)}")
+            self.parent.log_output.append(f"[卡组] 加载卡组失败: {str(e)}")
 
 class MyDeckPage(QWidget):
     def __init__(self, parent=None):
@@ -882,11 +1215,67 @@ class MyDeckPage(QWidget):
         title_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(title_label)
         
+        # 卡组保存管理布局
+        save_layout = QHBoxLayout()
+        save_layout.addWidget(QLabel("卡组名称:"))
+        self.save_deck_name = QLineEdit()
+        self.save_deck_name.setPlaceholderText("输入卡组名称")
+        self.save_deck_name.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(80, 80, 120, 180);
+                color: white;
+                border: 1px solid #5A5A8F;
+                border-radius: 5px;
+                padding: 5px;
+                min-width: 150px;
+            }
+        """)
+        save_layout.addWidget(self.save_deck_name)
+        
+        self.save_current_btn = QPushButton("保存")
+        self.save_current_btn.clicked.connect(self.save_current_deck)
+        save_layout.addWidget(self.save_current_btn)
+        
+        main_layout.addLayout(save_layout)
+        
+        # 已保存卡组加载布局
+        deck_layout = QHBoxLayout()
+        deck_layout.addWidget(QLabel("已保存卡组:"))
+        self.saved_decks_combo = QComboBox()
+        self.saved_decks_combo.setStyleSheet("""
+            QComboBox {
+                background-color: rgba(80, 80, 120, 180);
+                color: white;
+                border: 1px solid #5A5A8F;
+                border-radius: 5px;
+                padding: 5px;
+                min-width: 150px;
+            }
+            QComboBox:hover {
+                background-color: rgba(90, 90, 140, 180);
+            }
+        """)
+        self.saved_decks_combo.addItem("选择卡组", None)
+        deck_layout.addWidget(self.saved_decks_combo)
+        
+        self.load_deck_btn = QPushButton("加载")
+        self.load_deck_btn.clicked.connect(self.load_selected_deck)
+        deck_layout.addWidget(self.load_deck_btn)
+        
+        self.delete_deck_btn = QPushButton("删除")
+        self.delete_deck_btn.clicked.connect(self.delete_selected_deck)
+        deck_layout.addWidget(self.delete_deck_btn)
+        
+        main_layout.addLayout(deck_layout)
+        
         # 说明
         desc_label = QLabel("当前卡组中的卡片，右键点击卡片可移除")
         desc_label.setStyleSheet("font-size: 14px; color: #AACCFF;")
         desc_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(desc_label)
+        
+        # 刷新已保存卡组列表
+        self.refresh_saved_decks()
         
         # 卡片显示区域
         self.scroll_area = QScrollArea()
@@ -911,7 +1300,7 @@ class MyDeckPage(QWidget):
         
         # 操作按钮
         btn_layout = QHBoxLayout()
-        self.add_cards_btn = QPushButton("添加更多卡片")
+        self.add_cards_btn = QPushButton("重新构筑卡组")
         self.add_cards_btn.clicked.connect(self.add_cards)
         self.clear_deck_btn = QPushButton("清空所有卡组")
         self.clear_deck_btn.clicked.connect(self.clear_deck)
@@ -929,6 +1318,167 @@ class MyDeckPage(QWidget):
         # 加载卡组
         self.load_deck()
     
+    def save_current_deck(self):
+        """保存当前卡组"""
+        deck_name = self.save_deck_name.text().strip()
+        if not deck_name:
+            QMessageBox.warning(self, "警告", "请输入卡组名称！")
+            return
+        
+        # 获取当前卡组中的卡片
+        card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+        if not os.path.exists(card_dir):
+            QMessageBox.warning(self, "警告", "当前卡组为空！")
+            return
+        
+        card_files = [f for f in os.listdir(card_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        if not card_files:
+            QMessageBox.warning(self, "警告", "当前卡组为空！")
+            return
+        
+        try:
+            # 创建保存卡组的目录
+            decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+            os.makedirs(decks_dir, exist_ok=True)
+            
+            # 构建卡组数据
+            deck_data = {
+                "name": deck_name,
+                "cards": card_files,
+                "timestamp": int(time.time())
+            }
+            
+            # 保存到文件
+            deck_file = os.path.join(decks_dir, f"{deck_name}.json")
+            with open(deck_file, 'w', encoding='utf-8') as f:
+                json.dump(deck_data, f, ensure_ascii=False, indent=2)
+            
+            QMessageBox.information(self, "成功", f"卡组 '{deck_name}' 已保存！")
+            self.parent.log_output.append(f"[卡组] 已保存卡组 '{deck_name}'")
+            
+            # 清空输入框
+            self.save_deck_name.clear()
+            
+            # 刷新已保存卡组列表
+            self.refresh_saved_decks()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"保存卡组失败: {str(e)}")
+            self.parent.log_output.append(f"[卡组] 保存卡组失败: {str(e)}")
+
+    def refresh_saved_decks(self):
+        """刷新已保存卡组列表"""
+        if hasattr(self, 'saved_decks_combo'):
+            self.saved_decks_combo.clear()
+            self.saved_decks_combo.addItem("选择卡组", None)
+            
+            decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+            if os.path.exists(decks_dir):
+                for file in os.listdir(decks_dir):
+                    if file.endswith('.json'):
+                        deck_file = os.path.join(decks_dir, file)
+                        try:
+                            with open(deck_file, 'r', encoding='utf-8') as f:
+                                deck_data = json.load(f)
+                            self.saved_decks_combo.addItem(deck_data.get('name', file[:-5]), file)
+                        except Exception as e:
+                            print(f"读取卡组文件失败: {deck_file} - {e}")
+            
+        # 同时刷新CardSelectPage中的卡组列表
+        if hasattr(self.parent, 'card_select_page'):
+            self.parent.card_select_page.refresh_saved_decks()
+            
+    def load_selected_deck(self):
+        """加载选中的已保存卡组"""
+        deck_file = self.saved_decks_combo.itemData(self.saved_decks_combo.currentIndex())
+        if not deck_file:
+            QMessageBox.warning(self, "警告", "请选择要加载的卡组！")
+            return
+        
+        try:
+            decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+            deck_path = os.path.join(decks_dir, deck_file)
+            
+            with open(deck_path, 'r', encoding='utf-8') as f:
+                deck_data = json.load(f)
+            
+            # 清空当前卡组
+            card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+            for file in os.listdir(card_dir):
+                file_path = os.path.join(card_dir, file)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                except Exception as e:
+                    print(f"删除文件失败: {file_path} - {e}")
+            
+            # 复制卡片到当前卡组
+            source_dir = os.path.join(get_exe_dir(), "quanka")
+            success_count = 0
+            for card_file in deck_data.get('cards', []):
+                # 查找卡片在quanka目录中的路径
+                src = None
+                for root, _, files in os.walk(source_dir):
+                    if card_file in files:
+                        src = os.path.join(root, card_file)
+                        break
+                
+                if src and os.path.exists(src):
+                    dst = os.path.join(card_dir, card_file)
+                    try:
+                        shutil.copy2(src, dst)
+                        success_count += 1
+                    except Exception as e:
+                        print(f"复制文件失败: {src} -> {dst} - {e}")
+            
+            if success_count > 0:
+                # 重新加载卡组显示
+                self.load_deck()
+                
+                QMessageBox.information(self, "成功", f"已加载卡组 '{deck_data.get('name')}'，共 {success_count} 张卡片")
+                self.parent.log_output.append(f"[卡组] 已加载卡组 '{deck_data.get('name')}'")
+                
+                # 刷新卡牌优先级页面（已迁移）
+                if hasattr(self.parent, 'card_priority_page'):
+                    self.parent.card_priority_page.refresh_card_priority()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"加载卡组失败: {str(e)}")
+            self.parent.log_output.append(f"[卡组] 加载卡组失败: {str(e)}")
+            
+    def delete_selected_deck(self):
+        """删除选中的已保存卡组"""
+        deck_file = self.saved_decks_combo.itemData(self.saved_decks_combo.currentIndex())
+        deck_name = self.saved_decks_combo.currentText()
+        
+        if not deck_file:
+            QMessageBox.warning(self, "警告", "请选择要删除的卡组！")
+            return
+        
+        reply = QMessageBox.question(
+            self, '确认删除',
+            f'确定要删除卡组 "{deck_name}" 吗？此操作不可撤销！',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+                deck_path = os.path.join(decks_dir, deck_file)
+                
+                if os.path.exists(deck_path):
+                    os.remove(deck_path)
+                    
+                    QMessageBox.information(self, "成功", f"卡组 '{deck_name}' 已删除！")
+                    self.parent.log_output.append(f"[卡组] 已删除卡组 '{deck_name}'")
+                    
+                    # 刷新已保存卡组列表
+                    self.refresh_saved_decks()
+                    
+            except Exception as e:
+                QMessageBox.warning(self, "错误", f"删除卡组失败: {str(e)}")
+                self.parent.log_output.append(f"[卡组] 删除卡组失败: {str(e)}")
+                
     def load_deck(self):
         """加载当前卡组"""
         # 清空现有内容
@@ -954,6 +1504,9 @@ class MyDeckPage(QWidget):
             no_card_label.setAlignment(Qt.AlignCenter)
             self.grid_layout.addWidget(no_card_label, 0, 0)
             return
+        
+        # 刷新已保存卡组列表
+        self.refresh_saved_decks()
         
         # 添加卡片
         row, col = 0, 0
@@ -1006,6 +1559,115 @@ class MyDeckPage(QWidget):
                 col = 0
                 row += 1
     
+    def refresh_saved_decks(self):
+        """刷新已保存卡组列表"""
+        self.saved_decks_combo.clear()
+        self.saved_decks_combo.addItem("选择卡组", None)
+        
+        decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+        if os.path.exists(decks_dir):
+            for file in os.listdir(decks_dir):
+                if file.endswith('.json'):
+                    deck_file = os.path.join(decks_dir, file)
+                    try:
+                        with open(deck_file, 'r', encoding='utf-8') as f:
+                            deck_data = json.load(f)
+                        self.saved_decks_combo.addItem(deck_data.get('name', file[:-5]), file)
+                    except Exception as e:
+                        print(f"读取卡组文件失败: {deck_file} - {e}")
+    
+    def load_selected_deck(self):
+        """加载选中的已保存卡组"""
+        deck_file = self.saved_decks_combo.itemData(self.saved_decks_combo.currentIndex())
+        if not deck_file:
+            QMessageBox.warning(self, "警告", "请选择要加载的卡组！")
+            return
+        
+        try:
+            decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+            deck_path = os.path.join(decks_dir, deck_file)
+            
+            with open(deck_path, 'r', encoding='utf-8') as f:
+                deck_data = json.load(f)
+            
+            # 清空当前卡组
+            card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+            for file in os.listdir(card_dir):
+                file_path = os.path.join(card_dir, file)
+                try:
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+                except Exception as e:
+                    print(f"删除文件失败: {file_path} - {e}")
+            
+            # 复制卡片到当前卡组
+            import shutil
+            source_dir = os.path.join(get_exe_dir(), "quanka")
+            success_count = 0
+            for card_file in deck_data.get('cards', []):
+                # 查找卡片在quanka目录中的路径
+                src = None
+                for root, _, files in os.walk(source_dir):
+                    if card_file in files:
+                        src = os.path.join(root, card_file)
+                        break
+                
+                if src and os.path.exists(src):
+                    dst = os.path.join(card_dir, card_file)
+                    try:
+                        shutil.copy2(src, dst)
+                        success_count += 1
+                    except Exception as e:
+                        print(f"复制文件失败: {src} -> {dst} - {e}")
+            
+            if success_count > 0:
+                # 重新加载卡组显示
+                self.load_deck()
+                
+                QMessageBox.information(self, "成功", f"已加载卡组 '{deck_data.get('name')}'，共 {success_count} 张卡片")
+                self.parent.log_output.append(f"[卡组] 已加载卡组 '{deck_data.get('name')}'")
+                
+                # 刷新卡牌优先级页面（已迁移）
+                if hasattr(self.parent, 'card_priority_page'):
+                    self.parent.card_priority_page.refresh_card_priority()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"加载卡组失败: {str(e)}")
+            self.parent.log_output.append(f"[卡组] 加载卡组失败: {str(e)}")
+    
+    def delete_selected_deck(self):
+        """删除选中的已保存卡组"""
+        deck_file = self.saved_decks_combo.itemData(self.saved_decks_combo.currentIndex())
+        deck_name = self.saved_decks_combo.currentText()
+        
+        if not deck_file:
+            QMessageBox.warning(self, "警告", "请选择要删除的卡组！")
+            return
+        
+        reply = QMessageBox.question(
+            self, '确认删除',
+            f'确定要删除卡组 "{deck_name}" 吗？此操作不可撤销！',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                decks_dir = os.path.join(get_exe_dir(), "saved_decks")
+                deck_path = os.path.join(decks_dir, deck_file)
+                
+                if os.path.exists(deck_path):
+                    os.remove(deck_path)
+                    
+                    QMessageBox.information(self, "成功", f"卡组 '{deck_name}' 已删除！")
+                    self.parent.log_output.append(f"[卡组] 已删除卡组 '{deck_name}'")
+                    
+                    # 刷新已保存卡组列表
+                    self.refresh_saved_decks()
+                    
+            except Exception as e:
+                QMessageBox.warning(self, "错误", f"删除卡组失败: {str(e)}")
+                self.parent.log_output.append(f"[卡组] 删除卡组失败: {str(e)}")
+    
     def show_context_menu(self, pos, card_file):
         """显示右键菜单"""
         menu = QMenu(self)
@@ -1025,9 +1687,9 @@ class MyDeckPage(QWidget):
                 self.load_deck()  # 重新加载卡组
                 self.parent.log_output.append(f"[卡组] 已移除卡片: {card_file}")
                 
-                # 刷新参数设置页面
-                if hasattr(self.parent, 'config_page'):
-                    self.parent.config_page.refresh_card_priority()
+                # 刷新卡牌优先级页面（已迁移）
+                if hasattr(self.parent, 'card_priority_page'):
+                    self.parent.card_priority_page.refresh_card_priority()
             except Exception as e:
                 QMessageBox.warning(self, "错误", f"移除卡片失败: {str(e)}")
     
@@ -1059,9 +1721,247 @@ class MyDeckPage(QWidget):
                 self.load_deck()  # 重新加载卡组
                 self.parent.log_output.append("[卡组] 已清空所有卡片")
                 
-                # 刷新参数设置页面
-                if hasattr(self.parent, 'config_page'):
-                    self.parent.config_page.refresh_card_priority()
+                # 刷新卡牌优先级页面（已迁移）
+                if hasattr(self.parent, 'card_priority_page'):
+                    self.parent.card_priority_page.refresh_card_priority()
+
+class CardPriorityPage(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.config_data = self.load_config()
+        self.card_widgets = []
+        self.init_ui()
+
+    def init_ui(self):
+        self.setObjectName("CardPriorityPage")
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(15)
+
+        title_label = QLabel("卡牌优先级")
+        title_label.setStyleSheet("font-size: 20px; color: #88AAFF; font-weight: bold;")
+        title_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(title_label)
+
+        desc_label = QLabel("为卡组中的卡片设置优先级 数字越大优先级越低，优先度上限是999(默认所有卡牌999)")
+        desc_label.setStyleSheet("font-size: 12px; color: #AACCFF;")
+        main_layout.addWidget(desc_label)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_content = QWidget()
+        self.scroll_layout = QVBoxLayout(self.scroll_content)
+        self.scroll_area.setWidget(self.scroll_content)
+        self.scroll_content.setObjectName("ScrollContent")
+        main_layout.addWidget(self.scroll_area)
+
+        # 设置滚动区域样式与主窗口一致
+        self.scroll_area.setStyleSheet("""
+            QScrollArea {
+                background-color: transparent;
+                border: none;
+            }
+            QWidget#ScrollContent {
+                background-color: transparent;
+            }
+        """)
+        self.scroll_content.setObjectName("ScrollContent")
+        main_layout.addWidget(self.scroll_area)
+
+        btn_layout = QHBoxLayout()
+        self.save_btn = QPushButton("保存优先级")
+        self.save_btn.clicked.connect(self.save_config)
+        self.back_btn = QPushButton("返回主界面")
+        self.back_btn.clicked.connect(lambda: self.parent.stacked_widget.setCurrentIndex(0))
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.save_btn)
+        btn_layout.addWidget(self.back_btn)
+        btn_layout.addStretch()
+        main_layout.addLayout(btn_layout)
+
+        self.load_card_priority_settings()
+
+    def load_config(self):
+        config_path = os.path.join(get_exe_dir(), "config.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+        return {}
+
+    def load_card_priority_settings(self):
+        # 清空现有内容
+        for i in reversed(range(self.scroll_layout.count())):
+            widget = self.scroll_layout.itemAt(i).widget()
+            if widget:
+                widget.deleteLater()
+        self.card_widgets = []
+
+        card_dir = os.path.join(get_exe_dir(), "shadowverse_cards_cost")
+        if not os.path.exists(card_dir):
+            no_card_label = QLabel("未找到卡组卡片，请先在'卡组选择'页面选择卡片")
+            no_card_label.setStyleSheet("color: #FF8888; font-size: 14px;")
+            no_card_label.setAlignment(Qt.AlignCenter)
+            self.scroll_layout.addWidget(no_card_label)
+            return
+
+        card_files = [f for f in os.listdir(card_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        if not card_files:
+            no_card_label = QLabel("没有找到卡片，请先在'卡组选择'页面选择卡片")
+            no_card_label.setStyleSheet("color: #FF8888; font-size: 14px;")
+            no_card_label.setAlignment(Qt.AlignCenter)
+            self.scroll_layout.addWidget(no_card_label)
+            return
+
+        for card_file in card_files:
+            card_name = card_file.split('_', 1)[-1].rsplit('.', 1)[0]
+            card_row = QWidget()
+            card_row.setStyleSheet("background-color: rgba(60, 60, 90, 150); border-radius: 10px;")
+            row_layout = QHBoxLayout(card_row)
+            row_layout.setContentsMargins(10, 5, 10, 5)
+
+            card_label = QLabel()
+            card_path = os.path.join(get_exe_dir(), "shadowverse_cards_cost", card_file)
+            pixmap = QPixmap(card_path)
+            if not pixmap.isNull():
+                pixmap = pixmap.scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                card_label.setPixmap(pixmap)
+            card_label.setAlignment(Qt.AlignCenter)
+            row_layout.addWidget(card_label)
+
+            name_label = QLabel(card_name)
+            name_label.setStyleSheet("color: #FFFFFF; font-weight: bold; min-width: 120px;")
+            name_label.setAlignment(Qt.AlignCenter)
+            row_layout.addWidget(name_label)
+
+            row_layout.addWidget(QLabel("出牌优先级:"))
+            play_priority_input = QLineEdit()
+            play_priority_input.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
+            play_priority_input.setMaximumWidth(50)
+            high_priority = self.config_data.get("high_priority_cards", {}).get(card_name, {})
+            if high_priority:
+                play_priority_input.setText(str(high_priority.get("priority", "")))
+            row_layout.addWidget(play_priority_input)
+
+            row_layout.addWidget(QLabel("进化优先级:"))
+            evolve_priority_input = QLineEdit()
+            evolve_priority_input.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
+            evolve_priority_input.setMaximumWidth(50)
+            evolve_priority = self.config_data.get("evolve_priority_cards", {}).get(card_name, {})
+            if evolve_priority:
+                evolve_priority_input.setText(str(evolve_priority.get("priority", "")))
+            row_layout.addWidget(evolve_priority_input)
+
+            self.card_widgets.append({
+                "card_name": card_name,
+                "play_priority": play_priority_input,
+                "evolve_priority": evolve_priority_input
+            })
+
+            self.scroll_layout.addWidget(card_row)
+
+        self.scroll_layout.addStretch()
+
+    def refresh_card_priority(self):
+        current_settings = {}
+        for card in self.card_widgets:
+            play_priority = card["play_priority"].text().strip()
+            evolve_priority = card["evolve_priority"].text().strip()
+            current_settings[card["card_name"]] = {"play": play_priority, "evolve": evolve_priority}
+
+        self.load_card_priority_settings()
+
+        for card in self.card_widgets:
+            card_name = card["card_name"]
+            if card_name in current_settings:
+                settings = current_settings[card_name]
+                if settings["play"]:
+                    card["play_priority"].setText(settings["play"])
+                if settings["evolve"]:
+                    card["evolve_priority"].setText(settings["evolve"]) 
+
+    def get_current_config(self):
+        high_priority_cards = {}
+        evolve_priority_cards = {}
+        for card in self.card_widgets:
+            card_name = card["card_name"]
+            play_priority_text = card["play_priority"].text().strip()
+            if play_priority_text:
+                try:
+                    priority = int(play_priority_text)
+                    high_priority_cards[card_name] = {"priority": priority}
+                except Exception:
+                    pass
+            evolve_priority_text = card["evolve_priority"].text().strip()
+            if evolve_priority_text:
+                try:
+                    priority = int(evolve_priority_text)
+                    evolve_priority_cards[card_name] = {"priority": priority}
+                except Exception:
+                    pass
+        result = {}
+        if high_priority_cards:
+            result["high_priority_cards"] = high_priority_cards
+        if evolve_priority_cards:
+            result["evolve_priority_cards"] = evolve_priority_cards
+        return result
+
+    def save_config(self):
+        # 仅保存卡牌优先级部分，合并磁盘上的其余配置
+        high_priority_cards = {}
+        evolve_priority_cards = {}
+        for card in self.card_widgets:
+            card_name = card["card_name"]
+            play_priority_text = card["play_priority"].text().strip()
+            if play_priority_text:
+                try:
+                    priority = int(play_priority_text)
+                    if priority < 0 or priority > 999:
+                        raise ValueError("优先级必须在0-999之间")
+                    high_priority_cards[card_name] = {"priority": priority}
+                except Exception as e:
+                    QMessageBox.warning(self, "输入错误", f"卡片 '{card_name}' 的出牌优先级设置错误: {str(e)}")
+                    return
+            evolve_priority_text = card["evolve_priority"].text().strip()
+            if evolve_priority_text:
+                try:
+                    priority = int(evolve_priority_text)
+                    if priority < 0 or priority > 999:
+                        raise ValueError("优先级必须在0-999之间")
+                    evolve_priority_cards[card_name] = {"priority": priority}
+                except Exception as e:
+                    QMessageBox.warning(self, "输入错误", f"卡片 '{card_name}' 的进化优先级设置错误: {str(e)}")
+                    return
+
+        config_path = os.path.join(get_exe_dir(), "config.json")
+        existing = {}
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = {}
+
+        if high_priority_cards:
+            existing["high_priority_cards"] = high_priority_cards
+        elif "high_priority_cards" in existing:
+            del existing["high_priority_cards"]
+
+        if evolve_priority_cards:
+            existing["evolve_priority_cards"] = evolve_priority_cards
+        elif "evolve_priority_cards" in existing:
+            del existing["evolve_priority_cards"]
+
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(existing, f, indent=4, ensure_ascii=False)
+            QMessageBox.information(self, "成功", "卡牌优先级已保存！")
+            if hasattr(self.parent, 'log_output'):
+                self.parent.log_output.append("[配置] 卡牌优先级已更新")
+        except Exception as e:
+            QMessageBox.warning(self, "保存失败", f"保存卡牌优先级失败: {str(e)}")
 
 class SharePage(QWidget):
     def __init__(self, parent=None):
@@ -1135,7 +2035,15 @@ class SharePage(QWidget):
             if os.path.exists(card_dir):
                 card_files = [f for f in os.listdir(card_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
             
-            config_data = self.parent.config_page.get_current_config()
+            # 读取磁盘上的完整配置（包含参数设置与卡牌优先级）以确保分享码包含完整内容
+            config_path = os.path.join(get_exe_dir(), "config.json")
+            config_data = {}
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+                except Exception:
+                    config_data = {}
             
             # 创建分享数据
             share_data = {
@@ -1220,10 +2128,13 @@ class SharePage(QWidget):
             config_path = os.path.join(get_exe_dir(), "config.json")
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(share_data["config"], f, indent=4, ensure_ascii=False)
-            
-            # 刷新UI
-            self.parent.config_page.refresh_config_display()
-            
+
+            # 刷新UI：更新参数设置页与卡牌优先级页
+            if hasattr(self.parent, 'config_page'):
+                self.parent.config_page.refresh_config_display()
+            if hasattr(self.parent, 'card_priority_page'):
+                self.parent.card_priority_page.refresh_card_priority()
+
             # 刷新我的卡组页面
             if hasattr(self.parent, 'my_deck_page'):
                 self.parent.my_deck_page.load_deck()
@@ -1442,6 +2353,10 @@ class ShadowverseUI(QMainWindow):
         self.my_deck_page = MyDeckPage(self)
         self.stacked_widget.addWidget(self.my_deck_page)
         
+        # 创建卡牌优先级独立页面
+        self.card_priority_page = CardPriorityPage(self)
+        self.stacked_widget.addWidget(self.card_priority_page)
+        
         self.setCentralWidget(central_widget)
     
     def set_background(self):
@@ -1583,6 +2498,10 @@ class ShadowverseUI(QMainWindow):
         self.config_btn.setFixedHeight(35)
         self.config_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(2))
         
+        self.card_priority_btn = QPushButton("卡牌优先级")
+        self.card_priority_btn.setFixedHeight(35)
+        self.card_priority_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(5))
+        
         self.my_deck_btn = QPushButton("我的卡组")
         self.my_deck_btn.setFixedHeight(35)
         self.my_deck_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(4))
@@ -1592,14 +2511,15 @@ class ShadowverseUI(QMainWindow):
         self.share_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(3))
         
         # 紧凑排列按钮
-        right_layout.addWidget(self.card_select_btn)
-        right_layout.addWidget(self.config_btn)
-        right_layout.addWidget(self.my_deck_btn)
-        right_layout.addWidget(self.share_btn)
-        right_layout.addStretch()
+        right_layout.addWidget(self.card_select_btn) # 卡组选择按钮        
+        right_layout.addWidget(self.my_deck_btn) # 我的卡组按钮
+        right_layout.addWidget(self.card_priority_btn) # 卡牌优先级按钮
+        right_layout.addWidget(self.config_btn) # 参数设置按钮
+        # right_layout.addWidget(self.share_btn) # 卡组应用和分享按钮
+        right_layout.addStretch() # 底部间距
         
-        control_layout.addWidget(right_widget)
-        layout.addWidget(control_widget)
+        control_layout.addWidget(right_widget) # 右侧功能按钮区域
+        layout.addWidget(control_widget) # 控制按钮区域
         
         # 日志区域
         log_widget = QWidget()

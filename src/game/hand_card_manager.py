@@ -46,7 +46,8 @@ class HandCardManager:
             bool: 如果手牌中有shield随从则返回True，否则返回False
         """
         try:
-        #     # 从game_constants导入shield随从列表
+        #        
+            # 从game_constants导入shield随从列表
             from src.config.game_constants import SHIELD_FOLLOWER_NAMES
             shield_names = SHIELD_FOLLOWER_NAMES
             # logger.info(f"成功加载 {len(shield_names)} 个shield随从名字")
@@ -58,17 +59,17 @@ class HandCardManager:
                 return False
             
             # 检查手牌中是否有shield随从
-            found_shield_cards = []
-            for card in hand_cards:
-                card_name = card.get('name', '')
-                if card_name in shield_names:
-                    found_shield_cards.append(card_name)
+            # found_shield_cards = []
+            # for card in hand_cards:
+            #     card_name = card.get('name', '')
+            #     if card_name in shield_names:
+            #         found_shield_cards.append(card_name)
             
-            if found_shield_cards:
-                logger.warning(f"手牌中发现护盾手牌: {' | '.join(found_shield_cards)}")
-                return True
-            else:
-                return False
+            # if found_shield_cards:
+            #     logger.warning(f"手牌中发现护盾手牌: {' | '.join(found_shield_cards)}")
+            #     return True
+            # else:
+            #     return False
                 
         except Exception as e:
             logger.error(f"检测shield随从时出错: {str(e)}")
@@ -148,9 +149,9 @@ class HandCardManager:
                     )
                     time.sleep(0.1)
                     #移除手牌光标提高识别率
-                    from src.config.game_constants import DEFAULT_ATTACK_TARGET
-                    self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
-                    time.sleep(1.2)
+                    # from src.config.game_constants import DEFAULT_ATTACK_TARGET
+                    # self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
+                    # time.sleep(0.3)
             
             except Exception as e:
                 logger.error(f"第{attempt + 1}次手牌识别尝试出错: {str(e)}")
