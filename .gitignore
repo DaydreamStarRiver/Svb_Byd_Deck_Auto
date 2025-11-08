@@ -72,6 +72,13 @@ debug/
 !templates_global/**/*.gif
 !templates_global/**/*.bmp
 
+# 允许quanka文件夹中的图片文件
+!quanka/**/*.png
+!quanka/**/*.jpg
+!quanka/**/*.jpeg
+!quanka/**/*.gif
+!quanka/**/*.bmp
+
 # 临时文件
 *.tmp
 *.temp
@@ -95,4 +102,4 @@ Thumbs.db
 *.7z
 
 # 配置文件（可选，根据项目需要）
-# config.json 
+# config.json
