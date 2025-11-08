@@ -22,22 +22,22 @@ SPECIAL_CARDS = {
     "蛇神之怒": {
         "target_type": "enemy_player"  # 目标类型：敌方玩家
     },
-    "威严的星晶骑士薇拉": {
+    "威严的星晶骑士·薇拉": {
         "target_type": "double_enemy"  # 目标类型：双随从
     },
-    "命运黄昏奥丁": {
+    "命运黄昏·奥丁": {
         "target_type": "shield_or_highest_hp"  # 目标类型：护盾或最高血量
     },
     "安息的团结者": {
         "target_type": "shield_or_highest_hp"  # 目标类型：护盾或最高血量
     },
-    "小栗帽": {
+    "小栗帽（联动异画）": {
         "target_type": "shield_or_highest_hp"  # 目标类型：护盾或最高血量
     },
     "触手撕咬": {
         "target_type": "enemy_player"  # 目标类型：敌方玩家
     },
-    "瓦路兹": {
+    "沉默的狙击手·瓦路兹": {
         "target_type": "enemy_followers_hp_less_than_6"  # 目标类型：敌方随从血量小于6
     },
     "剑士的斩击": {

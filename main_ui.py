@@ -895,17 +895,17 @@ class CardSelectPage(QWidget):
                 except Exception as e:
                     print(f"复制文件失败: {src} -> {dst} - {e}")
         
-            if success_count > 0:
-                QMessageBox.information(self, "成功", f"已保存 {success_count} 张卡片到卡组！")
-                self.parent.log_output.append(f"[卡组] 已保存 {success_count} 张卡片")
+        if success_count > 0:
+            QMessageBox.information(self, "成功", f"已保存 {success_count} 张卡片到卡组！")
+            self.parent.log_output.append(f"[卡组] 已保存 {success_count} 张卡片")
 
-                # 刷新卡牌优先级页面的卡片显示（迁移后）
-                if hasattr(self.parent, 'card_priority_page'):
-                    self.parent.card_priority_page.refresh_card_priority()
+            # 刷新卡牌优先级页面的卡片显示（迁移后）
+            if hasattr(self.parent, 'card_priority_page'):
+                self.parent.card_priority_page.refresh_card_priority()
 
-                # 刷新我的卡组页面的卡片显示
-                if hasattr(self.parent, 'my_deck_page'):
-                    self.parent.my_deck_page.load_deck()
+            # 刷新我的卡组页面的卡片显示
+            if hasattr(self.parent, 'my_deck_page'):
+                self.parent.my_deck_page.load_deck()
     
 
     

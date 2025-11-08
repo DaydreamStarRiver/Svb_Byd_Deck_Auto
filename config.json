@@ -3,7 +3,7 @@
     "extra_templates_dir": "extra_templates",
     "auto_restart": {
         "enabled": true,
-        "output_timeout": 300,
+        "output_timeout": 60,
         "match_timeout": 1200
     },
     "devices": [
@@ -39,8 +39,7 @@
         "human_like_drag_duration_range": [
             0.3,
             0.6
-        ],
-        "card_replacement_strategy": "4费档次"
+        ]
     },
     "ui": {
         "notification_enabled": true,

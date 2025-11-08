@@ -16,11 +16,14 @@ EVOLVE_SPECIAL_ACTIONS = {
     "铁拳神父": {
         "action": "attack_enemy_follower_hp_less_than_4"  # 进化后点击一个血量小于4的敌方随从
     },
-    "爽朗的天宫菲尔德亚": {
+    "沙神的巫女·莎拉": {
+        "action": "attack_enemy_follower_hp_less_than_4"  # 进化后点击一个血量小于4的敌方随从
+    },
+    "爽朗的天宫·菲尔德亚": {
         "action": "attack_two_enemy_followers_hp_highest",  # 进化后点击一个血量最高的敌方随从
         "super_evolution_action": "attack_two_enemy_followers_hp_highest"  # 超进化后点击一个血量最高的敌方随从
     },
-    "勇武的堕天使奥莉薇": {
+    "勇武的堕天使·奥莉薇": {
         "super_evolution_action": "our_followers_with_evolution"  # 超进化的同时选择点击一个未进化的随从
     }
 }
