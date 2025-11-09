@@ -195,11 +195,11 @@ class EvolutionSpecialActions:
             else:
                 self.device_state.logger.info(f"[{follower_name}]进化后未找到HP<=3随从")
     
-    def _scan_enemy_followers(self, screenshot):
+    def _scan_enemy_followers(self, screenshot, is_select=False):
         """扫描敌方随从"""
         # 这里需要调用原有的扫描方法，通过device_state访问
         if hasattr(self.device_state, 'game_manager') and self.device_state.game_manager:
-            return self.device_state.game_manager.scan_enemy_followers(screenshot)
+            return self.device_state.game_manager.scan_enemy_followers(screenshot, is_select=is_select)
         return []
     
     def _scan_our_followers(self, screenshot):

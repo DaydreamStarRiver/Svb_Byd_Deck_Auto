@@ -178,8 +178,6 @@ class CardPlaySpecialActions:
                         key=lambda t: _hp(t[3]),
                         reverse=True
                     )
-                    raw_debug = [(int(f[0]), int(f[1]), _hp(f[3])) for f in enemy_followers]
-                    self.device_state.logger.info(f"敌方随从（原始顺序）：{raw_debug}")
 
                     # 只一个：保持原逻辑
                     if len(sorted_followers) == 1:
@@ -246,7 +244,7 @@ class CardPlaySpecialActions:
             # 检测敌方随从
             screenshot = self.device_state.take_screenshot()
             if screenshot:
-                enemy_followers = self._scan_enemy_followers(screenshot)
+                enemy_followers = self._scan_enemy_followers(screenshot, is_select=True)
                 if enemy_followers:
                     # 找出血量最高的随从
                     try:
@@ -254,11 +252,15 @@ class CardPlaySpecialActions:
                         enemy_x, enemy_y, _, _ = max_hp_follower
                         enemy_x = int(enemy_x)
                         enemy_y = int(enemy_y)
+                        # human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
+                        # time.sleep(0.9)  # 等待0.2秒
                         self.device_state.u2_device.click(enemy_x, enemy_y)
                         self.device_state.logger.info(f"点击血量最高的敌方随从位置: ({enemy_x}, {enemy_y})")
                     except Exception as e:
                         self.device_state.logger.warning(f"选择敌方随从时出错: {str(e)}")
                 else:
+                    # human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
+                    # time.sleep(0.9)  # 等待0.2秒
                     player_x = DEFAULT_ATTACK_TARGET[0] + random.randint(-DEFAULT_ATTACK_RANDOM, DEFAULT_ATTACK_RANDOM)
                     player_y = DEFAULT_ATTACK_TARGET[1] + random.randint(-DEFAULT_ATTACK_RANDOM, DEFAULT_ATTACK_RANDOM)
                     self.device_state.logger.info("未检测到敌方随从，尝试检测敌方护符或者其他可选择目标")
@@ -393,11 +395,11 @@ class CardPlaySpecialActions:
             return self.device_state.game_manager.scan_shield_targets()
         return []
     
-    def _scan_enemy_followers(self, screenshot):
+    def _scan_enemy_followers(self, screenshot, is_select=False):
         """扫描敌方随从"""
         # 这里需要调用原有的扫描方法，通过device_state访问
         if hasattr(self.device_state, 'game_manager') and self.device_state.game_manager:
-            return self.device_state.game_manager.scan_enemy_followers(screenshot)
+            return self.device_state.game_manager.scan_enemy_followers(screenshot, is_select=is_select)
         return []
     
     def _handle_scan_our_follower_to_choose_target(self, card_name, center_x, center_y, target_x):

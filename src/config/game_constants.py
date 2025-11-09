@@ -6,7 +6,9 @@
 # ============================= 屏幕坐标和区域 =============================
 
 # 敌方随从血量检测区域 (左上角x, 左上角y, 右下角x, 右下角y)
-ENEMY_HP_REGION = (249, 249, 1015, 310)
+# Updated for improved sliding window detection
+ENEMY_HP_REGION = (322, 263, 1073, 302)
+ENEMY_HP_REGION_UP = (322, 250, 1073, 289)
 
 # 敌方随从攻击力检测区域 (左上角x, 左上角y, 右下角x, 右下角y)
 ENEMY_ATK_REGION = (263, 297, 1015, 307)
@@ -47,6 +49,21 @@ BLANK_CLICK_RANDOM = 2  # 随机偏移范围
 # OCR识别区域大小
 OCR_CROP_SIZE = 45  # 用于血量识别的裁剪区域大小
 OCR_CROP_HALF_SIZE = OCR_CROP_SIZE // 2  # 裁剪区域的一半大小
+
+# ============================= HP Detection - Sliding Window Parameters =============================
+
+# 滑动窗口参数
+HP_WINDOW_WIDTH = 43        # 窗口宽度
+HP_WINDOW_HEIGHT = 39       # 窗口高度
+HP_SLIDE_STEP = 1           # 滑动步长
+HP_MIN_FOLLOWER_GAP = 105   # 随从之间最小间隔
+HP_MAX_FOLLOWERS = 5        # 最大随从数量
+
+# 颜色检测阈值
+HP_RED_BG_THRESHOLD = 0.26      # 红色背景阈值 >= 26%
+HP_OTHER_THRESHOLD = 0.25       # 噪声阈值 < 25%
+HP_DIGIT_THRESHOLD = 0.06       # 数字像素阈值 >= 6%
+HP_BRIGHT_RED_V_THRESHOLD = 210 # 亮红色V值阈值 (HSV中的V分量，用于区分数字和背景)
 
 # ============================= HSV颜色范围 =============================
 

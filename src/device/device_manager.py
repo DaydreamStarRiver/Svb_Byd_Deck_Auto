@@ -162,10 +162,10 @@ class DeviceManager:
             start_time = time.time()
 
             # 检查超时并重启游戏
-            if device_state.check_timeout_and_restart():
-                # 如果重启成功，继续循环；如果失败，等待一段时间后继续
-                time.sleep(30)
-                continue
+            # if device_state.check_timeout_and_restart():
+            #     # 如果重启成功，继续循环；如果失败，等待一段时间后继续
+            #     time.sleep(30)
+            #     continue
 
             # 检查命令队列
             while not device_state.command_queue.empty():
