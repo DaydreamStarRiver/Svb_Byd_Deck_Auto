@@ -179,14 +179,14 @@ class DeviceManager:
                 continue
 
             # 主要游戏逻辑
-            self._process_game_logic(device_state, game_manager, skip_buttons)
+            self._process_game_logic(device_state, game_manager, skip_buttons, self.config_manager)
 
             # 计算处理时间并调整等待
             process_time = time.time() - start_time
             sleep_time = max(0, 1 - process_time)
             time.sleep(sleep_time)
     
-    def _process_game_logic(self, device_state: DeviceState, game_manager: GameManager, skip_buttons: List[str]):
+    def _process_game_logic(self, device_state: DeviceState, game_manager: GameManager, skip_buttons: List[str], config_manager):
         """处理游戏逻辑"""
         # 获取截图
         screenshot = device_state.take_screenshot()
@@ -244,7 +244,22 @@ class DeviceManager:
 
                 if key == 'decision':
                     device_state.start_new_match()
-                    game_manager.game_actions._detect_change_card()
+                    # 尝试使用新的换牌策略，如果失败则回退到旧策略
+                    try:
+                        from src.utils.swap_strategy_main_ui_integration import execute_swap_strategy_in_game
+                        # 从配置中获取用户选择的费用档次
+                        strategy_setting = config_manager.get("game", {}).get("card_replacement_strategy", "3费档次")
+                        
+                        device_state.logger.info(f"尝试使用新换牌策略，目标费用档次: {strategy_setting}")
+                        success = execute_swap_strategy_in_game(game_manager.game_actions, strategy_setting)
+                        
+                        if not success:
+                            device_state.logger.warning("新换牌策略执行失败，回退到旧换牌策略")
+                            game_manager.game_actions._detect_change_card()
+                    except Exception as e:
+                        device_state.logger.error(f"执行新换牌策略时发生异常: {str(e)}")
+                        device_state.logger.warning("回退到旧换牌策略")
+                        game_manager.game_actions._detect_change_card()
                     time.sleep(0.5)
                     center_x = max_loc[0] + template_info['w'] // 2
                     center_y = max_loc[1] + template_info['h'] // 2
@@ -364,4 +379,4 @@ class DeviceManager:
         logger.info("=== 所有设备运行完成 ===")
         for serial, device_state in self.device_states.items():
             summary = device_state.get_run_summary()
-            logger.info(f"设备 {serial}: {summary['matches_completed']} 场对战") 
+            logger.info(f"设备 {serial}: {summary['matches_completed']} 场对战")

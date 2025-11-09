@@ -130,7 +130,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,  # 是否启用控制台窗口，因为程序需要获取用户输入以确认同意声明
+    console=True,  # 是否启用控制台窗口，因为程序需要获取用户输入以确认同意声明
     icon=os.path.join(project_root, 'app_icon.ico') if os.path.exists(os.path.join(project_root, 'app_icon.ico')) else None,
 )
 

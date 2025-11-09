@@ -1,16 +1,31 @@
 """
-工具模块
-提供各种通用工具函数和类
+实用工具模块
+提供各种辅助功能，包括GPU检测、资源管理、换牌策略等
 """
 
-from src.utils.resource_utils import resource_path
-from src.utils.gpu_utils import setup_gpu
-from src.utils.consent_utils import check_consent_file, save_consent, display_disclaimer_and_get_consent
+from .consent_utils import *
+from .gpu_utils import *
+from .hp_detection import *
+from .mnist_preprocessor import *
+from .resource_utils import *
+from .card_swap_strategy import determine_card_swaps, execute_card_swaps
+from .swap_strategy_main_ui_integration import execute_swap_strategy_in_game
 
 __all__ = [
-    'resource_path',
-    'setup_gpu', 
-    'check_consent_file',
-    'save_consent',
-    'display_disclaimer_and_get_consent'
-] 
+    # consent_utils
+    'check_consent',
+    'get_consent_template_path',
+    # gpu_utils
+    'check_gpu',
+    # hp_detection
+    'detect_hp',
+    # mnist_preprocessor
+    'preprocess_mnist_image',
+    # resource_utils
+    'get_resource_path',
+    # card_swap_strategy
+    'determine_card_swaps',
+    'execute_card_swaps',
+    # swap_strategy_main_ui_integration
+    'execute_swap_strategy_in_game',
+]

@@ -39,7 +39,8 @@
         "human_like_drag_duration_range": [
             0.3,
             0.6
-        ]
+        ],
+        "card_replacement_strategy": "5费档次"
     },
     "ui": {
         "notification_enabled": true,
