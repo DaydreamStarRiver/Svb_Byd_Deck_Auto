@@ -1,10 +1,102 @@
 {
-    "adb_port": 16384,
-    "extra_templates_dir": "extra_templates",
+    "game": {
+        "human_like_drag_duration_range": [
+            0.08,
+            0.1
+        ],
+        "card_replacement_strategy": "4费档次"
+    },
     "auto_restart": {
-        "enabled": true,
-        "output_timeout": 60,
-        "match_timeout": 1200
+        "enabled": false,
+        "match_timeout": 900
+    },
+    "high_priority_cards": {
+        "须臾剑士": {
+            "priority": 5
+        },
+        "信念腿法·兰德尔": {
+            "priority": 4
+        },
+        "假曰中的王女·普莉姆": {
+            "priority": 2
+        },
+        "勇猛的鲁米那斯枪士": {
+            "priority": 3
+        },
+        "安静的女仆·诺嘉": {
+            "priority": 1
+        },
+        "如火斗志·菲泽": {
+            "priority": 1
+        },
+        "宙域使者·尤妮": {
+            "priority": 2
+        },
+        "沉默的狙击手·瓦路兹": {
+            "priority": 4
+        },
+        "迷茫的狮子·莫德雷德": {
+            "priority": 3
+        },
+        "迸发的光明·阿波罗": {
+            "priority": 3
+        },
+        "王断的天宫·斯塔奇乌姆": {
+            "priority": 1
+        },
+        "真红与群青·塞达&贝阿朵丽丝": {
+            "priority": 4
+        },
+        "神之雷霆": {
+            "priority": 5
+        },
+        "卓越的鲁米那斯法师": {
+            "priority": 1
+        },
+        "雷维翁的迅雷·阿尔贝尔": {
+            "priority": 2
+        },
+        "冰心霸王·艾格罗瓦尔": {
+            "priority": 2
+        },
+        "小栗帽（联动异画）": {
+            "priority": 1
+        },
+        "触手撕咬": {
+            "priority": 2
+        }
+    },
+    "evolve_priority_cards": {
+        "须臾剑士": {
+            "priority": 4
+        },
+        "假曰中的王女·普莉姆": {
+            "priority": 5
+        },
+        "迷茫的狮子·莫德雷德": {
+            "priority": 3
+        },
+        "迸发的光明·阿波罗": {
+            "priority": 2
+        },
+        "王断的天宫·斯塔奇乌姆": {
+            "priority": 1
+        },
+        "真红与群青·塞达&贝阿朵丽丝": {
+            "priority": 4
+        },
+        "卓越的鲁米那斯法师": {
+            "priority": 5
+        },
+        "雷维翁的迅雷·阿尔贝尔": {
+            "priority": 3
+        },
+        "冰心霸王·艾格罗瓦尔": {
+            "priority": 5
+        },
+        "小栗帽（联动异画）": {
+            "priority": 3
+        }
     },
     "devices": [
         {
@@ -13,146 +105,5 @@
             "is_global": true,
             "screenshot_deep_color": true
         }
-    ],
-    "game": {
-        "resolution": "720p",
-        "evolution_rounds": [
-            5,
-            6,
-            7,
-            8,
-            9
-        ],
-        "evolution_rounds_with_extra_cost": [
-            4,
-            5,
-            6,
-            7,
-            8
-        ],
-        "max_follower_count": 5,
-        "cost_recognition": {
-            "confidence_threshold": 0.6,
-            "max_cost": 10,
-            "min_cost": 0
-        },
-        "human_like_drag_duration_range": [
-            0.3,
-            0.6
-        ],
-        "card_replacement_strategy": "5费档次"
-    },
-    "ui": {
-        "notification_enabled": true,
-        "log_level": "INFO",
-        "save_screenshots": false,
-        "debug_mode": false
-    },
-    "templates": {
-        "threshold": 0.85,
-        "pyramid_levels": 2,
-        "edge_thresholds": [
-            50,
-            200
-        ]
-    },
-    "server": "intl",
-    "dark_mode": false,
-    "window": {
-        "width": 1200,
-        "height": 1000
-    },
-    "high_priority_cards": {
-        "骑士": {
-            "priority": 4
-        },
-        "须臾剑士": {
-            "priority": 10
-        },
-        "信念腿法·兰德尔": {
-            "priority": 8
-        },
-        "假曰中的王女·普莉姆": {
-            "priority": 9
-        },
-        "勇猛的鲁米那斯枪士": {
-            "priority": 10
-        },
-        "安静的女仆·诺嘉": {
-            "priority": 9
-        },
-        "雷火双神·福尼加尔&亚文哈尔": {
-            "priority": 8
-        },
-        "如火斗志·菲泽": {
-            "priority": 6
-        },
-        "宙域使者·尤妮": {
-            "priority": 6
-        },
-        "常在战场·景光": {
-            "priority": 7
-        },
-        "迷茫的狮子·莫德雷德": {
-            "priority": 5
-        },
-        "迸发的光明·阿波罗": {
-            "priority": 6
-        },
-        "王断的天宫·斯塔奇乌姆": {
-            "priority": 1
-        },
-        "真红与群青·塞达&贝阿朵丽丝": {
-            "priority": 3
-        },
-        "神之雷霆": {
-            "priority": 6
-        },
-        "雷维翁的迅雷·阿尔贝尔": {
-            "priority": 2
-        },
-        "冰心霸王·艾格罗瓦尔": {
-            "priority": 4
-        },
-        "触手撕咬": {
-            "priority": 4
-        },
-        "人马骑士": {
-            "priority": 1
-        }
-    },
-    "evolve_priority_cards": {
-        "须臾剑士": {
-            "priority": 10
-        },
-        "信念腿法·兰德尔": {
-            "priority": 6
-        },
-        "如火斗志·菲泽": {
-            "priority": 6
-        },
-        "常在战场·景光": {
-            "priority": 6
-        },
-        "迷茫的狮子·莫德雷德": {
-            "priority": 5
-        },
-        "王断的天宫·斯塔奇乌姆": {
-            "priority": 1
-        },
-        "真红与群青·塞达&贝阿朵丽丝": {
-            "priority": 4
-        },
-        "雷维翁的迅雷·阿尔贝尔": {
-            "priority": 2
-        },
-        "人马骑士": {
-            "priority": 1
-        }
-    },
-    "card_priority": {
-        "0_烈绝的灭牙": 1,
-        "0_爱绝的飞翔": 50,
-        "0_绝叫的扩散": 50
-    }
+    ]
 }

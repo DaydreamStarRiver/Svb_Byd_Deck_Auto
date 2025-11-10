@@ -102,4 +102,6 @@ Thumbs.db
 *.7z
 
 # 配置文件（可选，根据项目需要）
-# config.json
+config.json
+/saved_decks/*.json
+*.bat
