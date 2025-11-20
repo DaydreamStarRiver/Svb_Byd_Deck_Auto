@@ -8,7 +8,6 @@ from .gpu_utils import *
 from .hp_detection import *
 from .mnist_preprocessor import *
 from .resource_utils import *
-from .card_swap_strategy import determine_card_swaps, execute_card_swaps
 from .swap_strategy_main_ui_integration import execute_swap_strategy_in_game
 
 __all__ = [
@@ -23,9 +22,6 @@ __all__ = [
     'preprocess_mnist_image',
     # resource_utils
     'get_resource_path',
-    # card_swap_strategy
-    'determine_card_swaps',
-    'execute_card_swaps',
     # swap_strategy_main_ui_integration
     'execute_swap_strategy_in_game',
 ]

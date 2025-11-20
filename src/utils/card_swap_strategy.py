@@ -12,42 +12,62 @@ import time
 logger = logging.getLogger(__name__)
 
 
-def determine_card_swaps(hand_cards: List[int], strategy: str) -> Tuple[List[int], List[int]]:
+def determine_card_swaps_legacy(
+    hand_cards: List[Dict],
+    strategy: str
+) -> Tuple[List[int], List[int], List[str]]:
     """
-    根据当前手牌和选择的策略，确定需要保留和更换的卡牌索引
-    
+    旧版换牌策略（简单档次判断，无优先级支持）
+
+    与旧版 determine_card_swaps 的区别：
+    1. 接受新格式输入 List[Dict]（但只使用 cost 字段）
+    2. 返回三元组 (keep_indices, swap_indices, reasons) 兼容新接口
+
+    策略规则：
+    - 简单基于费用阈值判断
+    - 无卡牌优先级考虑
+    - 无费用上限控制（1费/2费可以无限）
+    - 无曲线完整性检查
+
     Args:
-        hand_cards: 当前手牌，每个元素表示卡牌费用
-        strategy: 换牌策略，直接从UI传入的策略名称（"3费档次"、"4费档次"、"5费档次"）
-    
+        hand_cards: 手牌列表，格式 [{'cost': 3, 'name': '卡名', ...}, ...]
+        strategy: 换牌策略名称（"3费档次" | "4费档次" | "5费档次"）
+
     Returns:
-        Tuple[List[int], List[int]]: (需要保留的卡牌索引, 需要更换的卡牌索引)
+        Tuple[List[int], List[int], List[str]]:
+            - keep_indices: 保留的卡牌索引列表
+            - swap_indices: 换掉的卡牌索引列表
+            - reasons: 每张换牌的原因列表（兼容新接口）
     """
-    # 确保手牌数量不超过4张（影之诗起始手牌只有4张）
-    hand_cards = hand_cards[:4]
-    num_cards = len(hand_cards)
-    
-    # 根据UI设置的策略直接执行对应的换牌逻辑
-    cards_to_replace = []
-    
-    logger.info(f"当前手牌费用: {hand_cards}")
-    logger.info(f"使用策略: {strategy}")
-    
+    # 提取费用列表
+    hand_costs = [card['cost'] for card in hand_cards]
+
+    # 确保手牌数量不超过4张
+    hand_costs = hand_costs[:4]
+    num_cards = len(hand_costs)
+
+    logger.info(f"[old] 当前手牌费用: {hand_costs}")
+    logger.info(f"[old] 使用策略: {strategy}")
+
+    # 根据策略执行对应的换牌逻辑
     if strategy == '3费档次':
-        cards_to_replace = _check_3_cost_strategy(hand_cards)
+        swap_indices = _check_3_cost_strategy(hand_costs)
     elif strategy == '4费档次':
-        cards_to_replace = _check_4_cost_strategy(hand_cards)
+        swap_indices = _check_4_cost_strategy(hand_costs)
     elif strategy == '5费档次':
-        cards_to_replace = _check_5_cost_strategy(hand_cards)
+        swap_indices = _check_5_cost_strategy(hand_costs)
     else:
-        # 默认使用3费档次策略
-        logger.warning(f"未知策略: {strategy}，使用默认3费档次策略")
-        cards_to_replace = _check_3_cost_strategy(hand_cards)
-    
-    # 计算需要保留的卡牌索引
-    keep_indices = [i for i in range(num_cards) if i not in cards_to_replace]
-    
-    return keep_indices, cards_to_replace
+        # 默认使用4费档次策略
+        logger.warning(f"[old] 未知策略: {strategy}，使用默认4费档次策略")
+        swap_indices = _check_4_cost_strategy(hand_costs)
+
+    # 计算保留索引
+    keep_indices = [i for i in range(num_cards) if i not in swap_indices]
+
+    # 生成原因列表（简单说明）
+    reasons = [f"超过{strategy}档次" for _ in swap_indices]
+
+    return keep_indices, swap_indices, reasons
 
 
 def _check_3_cost_strategy(hand_costs):
@@ -226,58 +246,3 @@ def _check_5_cost_strategy(hand_costs):
         return [i for i, cost in enumerate(hand_costs) if cost > 5]
     
     return []
-
-
-
-
-
-def execute_card_swaps(game_actions_instance, swap_indices: List[int], card_infos: List[Dict]) -> bool:
-    """
-    根据指定的索引执行换牌操作
-    
-    Args:
-        game_actions_instance: GameActions类的实例
-        swap_indices: 需要更换的卡牌索引列表
-        card_infos: 卡牌信息列表，包含位置信息
-    
-    Returns:
-        bool: 换牌操作是否成功
-    """
-    try:
-        device_state = game_actions_instance.device_state
-        
-        # 确保换牌索引不超过卡牌信息数量
-        valid_indices = [idx for idx in swap_indices if 0 <= idx < len(card_infos)]
-        
-        if not valid_indices:
-            logger.info("没有需要更换的卡牌")
-            return True
-        
-        from src.config import settings
-        from src.game.game_actions import human_like_drag
-        
-        # 执行换牌操作
-        for idx in valid_indices:
-            card = card_infos[idx]
-            center_x = card['center_x']
-            center_y = card['center_y']
-            cost = card['cost']
-            
-            logger.info(f"更换费用为{cost}的卡牌")
-            # 拖动卡牌到换牌区域上方
-            human_like_drag(
-                device_state.u2_device,
-                center_x + 66, 516,  # 卡牌中心位置稍微向右偏移
-                center_x + 66, 208,  # 换牌区域上方
-                duration=random.uniform(*settings.get_human_like_drag_duration_range())
-            )
-            # 等待一下，确保换牌操作完成
-            import time
-            time.sleep(0.5)
-        
-        logger.info(f"成功更换了{len(valid_indices)}张卡牌")
-        return True
-        
-    except Exception as e:
-        logger.error(f"执行换牌操作时出错: {str(e)}")
-        return False

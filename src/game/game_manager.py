@@ -83,10 +83,7 @@ class GameManager:
 
         # 加载HP检测遮罩
         self.hp_mask = None
-        # 根据设备配置选择模板目录
-        is_global = device_state.device_config.get('is_global', False)
-        templates_dir = "templates_global" if is_global else "templates"
-        mask_path = os.path.join(templates_dir, "hp_count", "hp_mask.png")
+        mask_path = os.path.join("src", "templates", "hp_mask.png")
         if os.path.exists(mask_path):
             self.hp_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
             logger.info(f"HP遮罩已加载: {mask_path}, 尺寸: {self.hp_mask.shape}")
@@ -191,7 +188,7 @@ class GameManager:
 
         return enemy_atk_positions
 
-    def scan_enemy_followers(self, screenshot, debug_flag=True, is_select=False):
+    def scan_enemy_followers(self, screenshot, debug_flag=False, is_select=False):
         """
         检测场上的敌方随从位置与血量 (Improved with sliding window + fallback recognition)
 
