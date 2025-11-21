@@ -156,7 +156,12 @@ class SiftCardRecognition:
                     dst_pts = np.float32([hand_keypoints[m.trainIdx].pt for m in good_matches])
                     clusters = []
                     cluster_indices = []
-                    distance_thresh = 80  # 像素距离阈值
+                    # 根据区域动态调整聚类阈值
+                    region_width = self.hand_area[2] - self.hand_area[0]
+                    if region_width > 700:  # 换牌区域（789px）
+                        distance_thresh = 100  # 增大阈值以应对换牌时的特殊情况
+                    else:  # 战斗手牌区域（901px）
+                        distance_thresh = 80
                     for i, pt in enumerate(dst_pts):
                         found = False
                         for cidx, c in enumerate(clusters):
@@ -230,7 +235,7 @@ class SiftCardRecognition:
                     if card['name'] == fc['name']:
                         dx = card['center'][0] - fc['center'][0]
                         dy = card['center'][1] - fc['center'][1]
-                        if dx*dx + dy*dy < 900:  # 30像素内认为是同一张
+                        if dx*dx + dy*dy < 1600:  # 40像素内认为是同一张（从30px放宽到40px）
                             too_close = True
                             break
                 if not too_close:

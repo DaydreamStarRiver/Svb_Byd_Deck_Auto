@@ -10,6 +10,7 @@ import random
 import time
 import logging
 import os
+from typing import List, Dict, Tuple
 
 from torch import device
 from src.config import settings
@@ -984,309 +985,385 @@ class GameActions:
             return None
 
     def _detect_change_card(self, debug_flag=False):
-        """换牌阶段检测高费卡并换牌 - 绿色费用区域模板+SSIM匹配"""
+        """
+        简化的fallback换牌方法（使用SIFT识别 + 旧策略规则）
+
+        当主要的SIFT增强策略失败时使用此方法作为后备方案。
+        使用相同的SIFT识别，但应用旧版简单策略规则（无优先级、无曲线检查）。
+        """
         try:
+            from utils.card_swap_strategy_enhanced import determine_card_swaps_unified
+
+            self.device_state.logger.info("[Fallback] 使用SIFT识别 + 旧策略规则")
+
+            # 1. 获取截图
             screenshot = self.device_state.take_screenshot()
-            #screenshot = self.device_state.u2_device.screenshot()
             if screenshot is None:
-                self.device_state.logger.warning("无法获取截图")
+                self.device_state.logger.warning("[Fallback] 无法获取截图")
                 return False
-            image = np.array(screenshot)
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            # 换牌区
-            roi_x1, roi_y1, roi_x2, roi_y2 = 173, 404, 838, 452
-            change_area = image[roi_y1:roi_y2, roi_x1:roi_x2]
-            
-            # 创建用于绘制的换牌区副本
-            change_area_draw = change_area.copy()
-            
-            hsv = cv2.cvtColor(change_area, cv2.COLOR_BGR2HSV)
-            lower_green = np.array([43, 85, 70])
-            upper_green = np.array([54, 255, 255])
-            mask = cv2.inRange(hsv, lower_green, upper_green)
 
-            #形态学操作
-            kernel = np.ones((3, 3), np.uint8)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-            mask = cv2.erode(mask, kernel, iterations=1)
+            # 2. 复用单例SIFT识别器（避免重复加载模板）
+            mulligan_region = (182, 402, 971, 633)
+            sift_recognizer = self.hand_manager.sift_recognition
 
-            # mask合并
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            card_infos = []
-            
-            config_manager = ConfigManager()
-            change_card_cost_threshold = config_manager.get_change_card_cost_threshold()
+            # 临时设置换牌区域
+            original_hand_area = sift_recognizer.hand_area
+            sift_recognizer.hand_area = mulligan_region
 
-            # 先收集所有卡牌信息
-            for cnt in contours:
-                rect = cv2.minAreaRect(cnt)
-                (x, y), (w, h), angle = rect
-                if 25 < w < 45:
-                    center_x = int(x) + roi_x1
-                    center_y = int(y) + roi_y1
-                    card_roi = image[int(center_y - 13):int(center_y + 14), int(center_x - 10):int(center_x + 10)]
-                    
-                    # 新的费用识别方法：灰度+二值化+轮廓分割+SSIM匹配
-                    cost, confidence = self._recognize_cost_with_contour_ssim(card_roi, self.device_state, debug_flag)
-                    
-                    card_infos.append({'center_x': center_x, 'center_y': center_y, 'cost': cost, 'confidence': confidence})
-                    
-                    # 在换牌区绘制中心点和最小外接矩形
-                    local_x = int(x)
-                    local_y = int(y)
-                    cv2.circle(change_area_draw, (local_x, local_y), 5, (0, 0, 255), -1)  # 红色圆点
-                    box = cv2.boxPoints(rect)
-                    box = box.astype(int)
-                    cv2.drawContours(change_area_draw, [box], 0, (0, 255, 0), 2)  # 绿色矩形框
-                    cv2.putText(change_area_draw, f"{w:.1f}x{h:.1f}", (local_x, local_y-10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)  # 蓝色尺寸文字
-                    
-                    if debug_flag:
-                        debug_cost_dir = "debug_cost"
-                        if not os.path.exists(debug_cost_dir):
-                            os.makedirs(debug_cost_dir)
-                        roi_filename = f"change_card_{center_x}_{center_y}_{int(time.time()*1000)}.png"
-                        roi_path = os.path.join(debug_cost_dir, roi_filename)
-                        cv2.imwrite(roi_path, card_roi)
-                        # self.device_state.logger.info(f"已保存卡牌ROI: {roi_filename}")
-            
-            # 按x坐标排序（从左到右）
-            card_infos.sort(key=lambda x: x['center_x'])
-            
-            # 按从左到右的顺序执行换牌
-            for card_info in card_infos:
-                cost = card_info['cost']
-                center_x = card_info['center_x']
-                center_y = card_info['center_y']
-                
-                if cost > change_card_cost_threshold:
-                    self.device_state.logger.info(f"检测到费用{cost}的卡牌，换牌")
-                    human_like_drag(self.device_state.u2_device, center_x+66, 516, center_x+66,208, duration=random.uniform(*settings.get_human_like_drag_duration_range()))
-            
-            # 保存带有所有绿点的原图
-            if debug_flag:
-                # self.device_state.logger.info(f"开始保存换牌debug图片，检测到{len(card_infos)}张卡牌")
-                debug_cost_dir = "debug_cost"
-                if not os.path.exists(debug_cost_dir):
-                    os.makedirs(debug_cost_dir)
-                
-                try:
-                    # 保存原图上标记所有绿点的图
-                    debug_img = image.copy()
-                    for card_info in card_infos:
-                        center_x = card_info['center_x']
-                        center_y = card_info['center_y']
-                        cost = card_info['cost']
-                        cv2.circle(debug_img, (center_x, center_y), 8, (0, 255, 0), 2)
-                    debug_img_path = os.path.join(debug_cost_dir, f"change_card_all_{int(time.time()*1000)}.png")
-                    cv2.imwrite(debug_img_path, debug_img)
-                    # self.device_state.logger.info(f"已保存原图debug: {debug_img_path}")
-                    
-                    # 保存换牌区上标记中心点和最小外接矩形的图
-                    change_area_draw_path = os.path.join(debug_cost_dir, f"change_card_area_draw_{int(time.time()*1000)}.png")
-                    cv2.imwrite(change_area_draw_path, change_area_draw)
-                    # self.device_state.logger.info(f"已保存换牌区debug: {change_area_draw_path}")
-                except Exception as e:
-                    self.device_state.logger.error(f"保存换牌debug图片时出错: {str(e)}")
-            
-            return True
-            
+            try:
+                # 3. 识别手牌（带重试机制）
+                max_retries = 3
+                cards = None
+
+                for attempt in range(max_retries):
+                    # 执行识别
+                    recognized_cards = sift_recognizer.recognize_hand_cards(screenshot)
+
+                    if not recognized_cards:
+                        self.device_state.logger.warning(
+                            f"[Fallback] 第{attempt+1}次识别: 未检测到卡牌"
+                        )
+                        if attempt < max_retries - 1:
+                            time.sleep(0.3)
+                            screenshot = self.device_state.take_screenshot()
+                            if screenshot is None:
+                                continue
+                        continue
+
+                    # 确保最多4张牌
+                    recognized_cards = recognized_cards[:4]
+
+                    # 验证识别结果
+                    is_valid, reason = self._validate_mulligan_cards(recognized_cards)
+
+                    if is_valid:
+                        self.device_state.logger.info(
+                            f"[Fallback] 第{attempt+1}次识别成功，验证通过"
+                        )
+                        cards = recognized_cards
+                        break
+                    else:
+                        self.device_state.logger.warning(
+                            f"[Fallback] 第{attempt+1}次识别失败: {reason}"
+                        )
+                        if attempt < max_retries - 1:
+                            time.sleep(0.3)
+                            screenshot = self.device_state.take_screenshot()
+                            if screenshot is None:
+                                continue
+
+                # 重试后仍失败
+                if cards is None:
+                    self.device_state.logger.error(
+                        f"[Fallback] {max_retries}次重试均失败，放弃识别"
+                    )
+                    return False
+
+                # 4. 获取配置的策略
+                config_manager = ConfigManager()
+                strategy = config_manager.get("game", {}).get("card_replacement_strategy", "4费档次")
+
+                # 5. 调用统一接口，使用旧策略规则（use_enhanced=False）
+                keep_indices, swap_indices, reasons = determine_card_swaps_unified(
+                    cards,
+                    strategy,
+                    priority_cards=None,  # 旧策略不使用优先级
+                    use_enhanced=False     # 使用旧规则
+                )
+
+                self.device_state.logger.info(f"[Fallback] 策略: {strategy} (旧规则)")
+                self.device_state.logger.info(f"[Fallback] 保留: {keep_indices}, 换掉: {swap_indices}")
+
+                # 6. 执行换牌拖拽操作
+                if swap_indices:
+                    for idx in swap_indices:
+                        card = cards[idx]
+                        center_x, center_y = card['center']
+
+                        self.device_state.logger.info(
+                            f"[Fallback] 换掉 {card['name']} ({card['cost']}费)"
+                        )
+
+                        # 执行拖拽
+                        start_x = center_x + random.randint(-5, 5)
+                        start_y = 516
+                        end_x = center_x + random.randint(-5, 5)
+                        end_y = 208
+
+                        human_like_drag(
+                            self.device_state.u2_device,
+                            start_x, start_y,
+                            end_x, end_y,
+                            duration=random.uniform(*settings.get_human_like_drag_duration_range())
+                        )
+
+                        time.sleep(random.uniform(0.05, 0.1))
+
+                    self.device_state.logger.info(f"[Fallback] 换牌完成，共换掉 {len(swap_indices)} 张")
+                else:
+                    self.device_state.logger.info("[Fallback] 无需换牌")
+
+                return True
+
+            finally:
+                # 恢复原始hand_area
+                sift_recognizer.hand_area = original_hand_area
+
         except Exception as e:
-            self.device_state.logger.error(f"换牌检测出错: {str(e)}")
+            self.device_state.logger.error(f"[Fallback] 换牌失败: {str(e)}")
+            import traceback
+            self.device_state.logger.error(f"[Fallback] 错误详情:\n{traceback.format_exc()}")
             return False
 
-    def _recognize_cost_with_contour_ssim(self, card_roi, device_state=None, debug_flag=False):
-        """使用轮廓检测+SSIM相似度匹配识别费用数字"""
-        try:
-            # 截取数字区域（左上角）
-            digit_roi = card_roi[0:27, 0:20]  # 高27，宽20
-            
-            # 灰度化
-            gray_digit = cv2.cvtColor(digit_roi, cv2.COLOR_BGR2GRAY)
-            
-            # 二值化（阈值170）
-            _, binary_digit = cv2.threshold(gray_digit, 170, 255, cv2.THRESH_BINARY)
-            
-            # 保存二值化后的完整数字区域（用于调试）
-            if debug_flag and device_state and device_state.logger:
-                debug_cost_dir = "debug_cost"
-                if not os.path.exists(debug_cost_dir):
-                    os.makedirs(debug_cost_dir)
-                binary_filename = f"binary_digit_{int(time.time()*1000)}.png"
-                binary_path = os.path.join(debug_cost_dir, binary_filename)
-                cv2.imwrite(binary_path, binary_digit)
-                # device_state.logger.info(f"已保存二值化数字区域: {binary_filename}")
-            
-            # 轮廓检测（用于获取数字边界信息，但不分割）
-            contours, _ = cv2.findContours(binary_digit, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            if not contours:
-                if device_state and device_state.logger:
-                    device_state.logger.debug("未检测到数字轮廓")
-                return 0, 0.0
-            
-            # 筛选合适的轮廓（面积和尺寸过滤）
-            valid_contours = []
-            for cnt in contours:
-                area = cv2.contourArea(cnt)
-                if area > 20:  # 最小面积阈值
-                    x, y, w, h = cv2.boundingRect(cnt)
-                    if w > 3 and h > 5:  # 最小尺寸阈值
-                        valid_contours.append((cnt, x, y, w, h))
-            
-            if not valid_contours:
-                if device_state and device_state.logger:
-                    device_state.logger.debug("未找到有效的数字轮廓")
-                return 0, 0.0
-            
-            # 按x坐标排序（从左到右）
-            valid_contours.sort(key=lambda x: x[1])
-            
-            # 记录轮廓信息（用于调试）
-            if device_state and device_state.logger:
-                for i, (cnt, x, y, w, h) in enumerate(valid_contours):
-                    device_state.logger.debug(f"检测到轮廓{i+1}: 位置({x},{y}), 尺寸({w}x{h}), 面积: {cv2.contourArea(cnt):.1f}")
-            
-            # 直接对完整数字区域进行SSIM匹配（使用轮廓信息但不分割）
-            best_cost, best_confidence = self._ssim_match_digit(binary_digit, device_state, debug_flag, 1)
-            
-            if device_state and device_state.logger:
-                device_state.logger.debug(f"轮廓检测+SSIM匹配结果: {best_cost}, 置信度: {best_confidence:.3f}")
-            
-            return best_cost, best_confidence
-            
-        except Exception as e:
-            if device_state and device_state.logger:
-                device_state.logger.error(f"轮廓检测+SSIM识别出错: {str(e)}")
-            return 0, 0.0
 
-    def _ssim_match_digit(self, digit_roi, device_state=None, debug_flag=False, digit_index=1):
-        """使用SSIM相似度匹配单个数字"""
+    def _validate_mulligan_cards(self, cards: List[Dict]) -> Tuple[bool, str]:
+        """
+        验证换牌识别结果是否合理
+
+        Args:
+            cards: 识别到的卡牌列表
+
+        Returns:
+            (is_valid, reason): 是否有效及原因
+        """
+        # 检查1：必须恰好4张
+        if len(cards) != 4:
+            return False, f"卡牌数量错误: {len(cards)}张（预期4张）"
+
+        # 检查2：X坐标必须均匀分布
+        x_coords = sorted([c['center'][0] for c in cards])
+        # 换牌区域：182-971，宽789px
+        # 预期位置：每张卡间隔约197px，中心位置分别在 282, 479, 676, 873
+        expected_positions = [282, 479, 676, 873]
+
+        for i, (actual_x, expected_x) in enumerate(zip(x_coords, expected_positions)):
+            if abs(actual_x - expected_x) > 120:  # 允许±120px误差
+                return False, f"第{i+1}张卡位置异常: X={actual_x} (预期{expected_x}±120)"
+
+        # 检查3：Y坐标必须基本一致
+        y_coords = [c['center'][1] for c in cards]
+        y_mean = sum(y_coords) / len(y_coords)
+        for i, y in enumerate(y_coords):
+            if abs(y - y_mean) > 50:  # Y轴偏差不应超过50px
+                return False, f"第{i+1}张卡Y坐标异常: {y} (平均{y_mean:.0f}±50)"
+
+        return True, "验证通过"
+
+    def _detect_change_card_sift(self, debug_flag=False):
+        """
+        使用SIFT卡牌识别 + 增强策略的新换牌方法
+        替代旧的_detect_change_card方法
+        """
         try:
-            # 使用template_manager中已经设置好的模板目录
-            templates_dir = self.device_state.game_manager.template_manager.templates_dir
-            template_dir = f"{templates_dir}/cost_numbers"
-            best_cost = 0
-            best_ssim = 0.0
-            best_template_path = ""
-            
-            for cost in range(10):  # 0-9
-                # 加载该数字的模板
-                template_paths = glob.glob(os.path.join(template_dir, f"{cost}_*.png"))
-                if not template_paths:
-                    continue
-                
-                for template_path in template_paths:
-                    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-                    if template is None:
+            from utils.card_swap_strategy_enhanced import determine_card_swaps_enhanced
+            from config.card_priorities import get_high_priority_cards
+
+            # 1. 获取截图
+            screenshot = self.device_state.take_screenshot()
+            if screenshot is None:
+                self.device_state.logger.warning("[SIFT换牌] 无法获取截图")
+                return False
+
+            image = np.array(screenshot)
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+            # 2. 复用单例SIFT识别器（避免重复加载模板）
+            # 换牌区域: (182, 402, 971, 633)
+            mulligan_region = (182, 402, 971, 633)
+            sift_recognizer = self.hand_manager.sift_recognition
+
+            # 临时设置换牌区域
+            original_hand_area = sift_recognizer.hand_area
+            sift_recognizer.hand_area = mulligan_region
+
+            try:
+                # 3. 识别手牌（带重试机制）
+                max_retries = 3
+                cards = None
+
+                for attempt in range(max_retries):
+                    # 执行识别
+                    recognized_cards = sift_recognizer.recognize_hand_cards(screenshot)
+
+                    if not recognized_cards:
+                        self.device_state.logger.warning(
+                            f"[SIFT换牌] 第{attempt+1}次识别: 未检测到卡牌"
+                        )
+                        if attempt < max_retries - 1:
+                            time.sleep(0.3)  # 等待卡牌动画完成
+                            screenshot = self.device_state.take_screenshot()
+                            if screenshot is None:
+                                continue
                         continue
-                    
-                    # 二值化模板
-                    _, template_binary = cv2.threshold(template, 170, 255, cv2.THRESH_BINARY)
-                    
-                    # 调整模板大小以匹配目标
-                    h, w = digit_roi.shape
-                    template_resized = cv2.resize(template_binary, (w, h))
-                    
-                    # 计算SSIM相似度
-                    ssim_score = self._calculate_ssim(digit_roi, template_resized)
-                    
-                    if ssim_score > best_ssim:
-                        best_ssim = ssim_score
-                        best_cost = cost
-                        best_template_path = template_path
-                    
-                    # 保存匹配过程（用于调试）
-                    if debug_flag and device_state and device_state.logger and ssim_score > 0.5:
-                        debug_cost_dir = "debug_cost"
-                        if not os.path.exists(debug_cost_dir):
-                            os.makedirs(debug_cost_dir)
-                        
-                        # 保存模板匹配对比图
-                        template_name = os.path.basename(template_path).split('.')[0]
-                        comparison_filename = f"comparison_digit{digit_index}_cost{cost}_{template_name}_ssim{ssim_score:.3f}_{int(time.time()*1000)}.png"
-                        comparison_path = os.path.join(debug_cost_dir, comparison_filename)
-                        
-                        # 创建对比图：原数字 | 模板 | 差异
-                        h_roi, w_roi = digit_roi.shape
-                        h_tpl, w_tpl = template_resized.shape
-                        max_h = max(h_roi, h_tpl)
-                        comparison_img = np.zeros((max_h, w_roi + w_tpl + 10), dtype=np.uint8)
-                        
-                        # 放置原数字
-                        comparison_img[:h_roi, :w_roi] = digit_roi
-                        # 放置模板
-                        comparison_img[:h_tpl, w_roi+10:w_roi+10+w_tpl] = template_resized
-                        
-                        cv2.imwrite(comparison_path, comparison_img)
-                        device_state.logger.debug(f"已保存匹配对比图: {comparison_filename}")
-            
-            # 保存最佳匹配结果
-            if debug_flag and device_state and device_state.logger and best_ssim > 0:
-                debug_cost_dir = "debug_cost"
-                if not os.path.exists(debug_cost_dir):
-                    os.makedirs(debug_cost_dir)
-                
-                best_template_name = os.path.basename(best_template_path).split('.')[0]
-                best_match_filename = f"best_match_digit{digit_index}_cost{best_cost}_{best_template_name}_ssim{best_ssim:.3f}_{int(time.time()*1000)}.png"
-                best_match_path = os.path.join(debug_cost_dir, best_match_filename)
-                
-                # 创建最佳匹配对比图
-                h_roi, w_roi = digit_roi.shape
-                best_template = cv2.imread(best_template_path, cv2.IMREAD_GRAYSCALE)
-                _, best_template_binary = cv2.threshold(best_template, 170, 255, cv2.THRESH_BINARY)
-                best_template_resized = cv2.resize(best_template_binary, (w_roi, h_roi))
-                
-                max_h = max(h_roi, best_template_resized.shape[0])
-                best_comparison_img = np.zeros((max_h, w_roi + w_roi + 10), dtype=np.uint8)
-                best_comparison_img[:h_roi, :w_roi] = digit_roi
-                best_comparison_img[:h_roi, w_roi+10:w_roi*2+10] = best_template_resized
-                
-                cv2.imwrite(best_match_path, best_comparison_img)
-                device_state.logger.info(f"已保存最佳匹配结果: {best_match_filename}")
-            
-            return best_cost, best_ssim
-            
-        except Exception as e:
-            if device_state and device_state.logger:
-                device_state.logger.error(f"SSIM匹配出错: {str(e)}")
-            return 0, 0.0
 
-    def _calculate_ssim(self, img1, img2):
-        """计算两个图像的SSIM相似度"""
-        try:
-            # 确保两个图像都是uint8类型
-            img1 = img1.astype(np.uint8)
-            img2 = img2.astype(np.uint8)
-            
-            # 计算均值
-            mu1 = np.mean(img1)
-            mu2 = np.mean(img2)
-            
-            # 计算方差
-            sigma1_sq = np.var(img1)
-            sigma2_sq = np.var(img2)
-            
-            # 计算协方差
-            sigma12 = np.mean((img1 - mu1) * (img2 - mu2))
-            
-            # SSIM参数
-            C1 = (0.01 * 255) ** 2
-            C2 = (0.03 * 255) ** 2
-            
-            # 计算SSIM
-            numerator = (2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)
-            denominator = (mu1 ** 2 + mu2 ** 2 + C1) * (sigma1_sq + sigma2_sq + C2)
-            
-            if denominator == 0:
-                return 0.0
-            
-            ssim = numerator / denominator
-            return max(0.0, min(1.0, ssim))  # 确保结果在[0,1]范围内
-            
+                    # 确保最多4张牌（避免过度识别）
+                    recognized_cards = recognized_cards[:4]
+
+                    # 验证识别结果
+                    is_valid, reason = self._validate_mulligan_cards(recognized_cards)
+
+                    if is_valid:
+                        self.device_state.logger.info(
+                            f"[SIFT换牌] 第{attempt+1}次识别成功，验证通过"
+                        )
+                        cards = recognized_cards
+                        break
+                    else:
+                        self.device_state.logger.warning(
+                            f"[SIFT换牌] 第{attempt+1}次识别失败: {reason}"
+                        )
+
+                        # Debug: 输出识别到的卡牌位置信息
+                        for i, card in enumerate(recognized_cards):
+                            cx, cy = card['center']
+                            self.device_state.logger.debug(
+                                f"  卡牌{i+1}: {card['name']} | "
+                                f"费用{card['cost']} | "
+                                f"位置({cx},{cy}) | "
+                                f"置信度{card.get('confidence', 0):.3f}"
+                            )
+
+                        # 保存失败截图用于调试
+                        if debug_flag:
+                            failure_dir = "debug_mulligan_failures"
+                            if not os.path.exists(failure_dir):
+                                os.makedirs(failure_dir)
+
+                            failure_img = np.array(screenshot)
+                            failure_img = cv2.cvtColor(failure_img, cv2.COLOR_RGB2BGR)
+
+                            # 标注识别到的位置
+                            for i, card in enumerate(recognized_cards):
+                                cx, cy = card['center']
+                                cv2.circle(failure_img, (cx, cy), 8, (0, 0, 255), 2)
+                                cv2.putText(
+                                    failure_img,
+                                    f"{i+1}:{card['cost']}",
+                                    (cx - 15, cy - 15),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.5,
+                                    (0, 0, 255),
+                                    2
+                                )
+
+                            failure_path = os.path.join(
+                                failure_dir,
+                                f"fail_{int(time.time()*1000)}_attempt{attempt+1}.png"
+                            )
+                            cv2.imwrite(failure_path, failure_img)
+                            self.device_state.logger.debug(
+                                f"[SIFT换牌] 失败截图已保存: {failure_path}"
+                            )
+
+                        if attempt < max_retries - 1:
+                            time.sleep(0.3)  # 等待后重试
+                            screenshot = self.device_state.take_screenshot()
+                            if screenshot is None:
+                                continue
+
+                # 重试后仍失败
+                if cards is None:
+                    self.device_state.logger.error(
+                        f"[SIFT换牌] {max_retries}次重试均失败，放弃识别"
+                    )
+                    return False
+
+                # 记录识别结果（含详细位置信息）
+                card_names = [f"{c['cost']}费_{c['name']}" for c in cards]
+                self.device_state.logger.info(f"[SIFT换牌] 识别到手牌: {' | '.join(card_names)}")
+
+                # Debug: 输出详细位置信息
+                if debug_flag:
+                    for i, card in enumerate(cards):
+                        cx, cy = card['center']
+                        self.device_state.logger.debug(
+                            f"  [位置{i+1}] {card['name']} | "
+                            f"费用:{card['cost']} | "
+                            f"坐标:({cx},{cy}) | "
+                            f"置信度:{card.get('confidence', 0):.3f}"
+                        )
+
+                # 4. 获取配置的策略
+                config_manager = ConfigManager()
+                strategy_setting = config_manager.get("game", {}).get("card_replacement_strategy", "4费档次")
+
+                # 5. 调用增强策略决策
+                priority_cards = get_high_priority_cards()
+                keep_indices, swap_indices, reasons = determine_card_swaps_enhanced(
+                    cards,
+                    strategy_setting,
+                    priority_cards
+                )
+
+                self.device_state.logger.info(f"[SIFT换牌] 策略: {strategy_setting}")
+                self.device_state.logger.info(f"[SIFT换牌] 保留: {keep_indices}, 换掉: {swap_indices}")
+
+                # 6. 执行换牌拖拽操作
+                if swap_indices:
+                    for idx, reason in zip(swap_indices, reasons):
+                        card = cards[idx]
+                        center_x, center_y = card['center']
+
+                        self.device_state.logger.info(
+                            f"[SIFT换牌] 换掉 {card['name']} ({card['cost']}费) - 原因: {reason}"
+                        )
+
+                        # 执行拖拽 (从卡牌中心向上拖动)
+                        # 换牌区域Y轴: 402-633，拖拽起点大约在下方，终点在上方
+                        start_x = center_x + random.randint(-5, 5)
+                        start_y = 516  # 固定拖拽起点Y坐标
+                        end_x = center_x + random.randint(-5, 5)
+                        end_y = 208    # 固定拖拽终点Y坐标
+
+                        human_like_drag(
+                            self.device_state.u2_device,
+                            start_x, start_y,
+                            end_x, end_y,
+                            duration=random.uniform(*settings.get_human_like_drag_duration_range())
+                        )
+
+                        time.sleep(random.uniform(0.05, 0.1))
+
+                    self.device_state.logger.info(f"[SIFT换牌] 换牌完成，共换掉 {len(swap_indices)} 张")
+                else:
+                    self.device_state.logger.info("[SIFT换牌] 无需换牌，当前手牌已满足策略")
+
+                # 7. Debug模式保存截图
+                if debug_flag:
+                    debug_dir = "debug_mulligan_sift"
+                    if not os.path.exists(debug_dir):
+                        os.makedirs(debug_dir)
+
+                    debug_img = image.copy()
+                    for idx, card in enumerate(cards):
+                        center_x, center_y = card['center']
+                        color = (0, 255, 0) if idx in keep_indices else (0, 0, 255)
+                        cv2.circle(debug_img, (center_x, center_y), 10, color, 3)
+                        cv2.putText(
+                            debug_img,
+                            f"{card['cost']}费",
+                            (center_x - 20, center_y - 15),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            color,
+                            2
+                        )
+
+                    debug_path = os.path.join(debug_dir, f"mulligan_{int(time.time()*1000)}.png")
+                    cv2.imwrite(debug_path, debug_img)
+                    self.device_state.logger.info(f"[SIFT换牌] Debug图片已保存: {debug_path}")
+
+                return True
+
+            finally:
+                # 恢复原始hand_area
+                sift_recognizer.hand_area = original_hand_area
+
         except Exception as e:
-            return 0.0
+            self.device_state.logger.error(f"[SIFT换牌] 执行失败: {str(e)}")
+            import traceback
+            self.device_state.logger.error(f"[SIFT换牌] 错误详情:\n{traceback.format_exc()}")
+            return False
 
     def _scan_enemy_followers(self, screenshot, is_select=False):
         """检测场上的敌方随从位置与血量"""

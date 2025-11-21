@@ -71,6 +71,7 @@ debug/
 !templates_global/**/*.jpeg
 !templates_global/**/*.gif
 !templates_global/**/*.bmp
+!src/templates/**/*.png
 
 # 允许quanka文件夹中的图片文件
 !quanka/**/*.png
@@ -105,3 +106,6 @@ Thumbs.db
 config.json
 /saved_decks/*.json
 *.bat
+/.claude
+claude.md
+/debug*
