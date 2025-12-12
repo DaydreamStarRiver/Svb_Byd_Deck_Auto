@@ -109,3 +109,4 @@ config.json
 /.claude
 claude.md
 /debug*
+/quanka

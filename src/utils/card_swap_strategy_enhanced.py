@@ -52,17 +52,38 @@ STRATEGY_CONFIGS = {
 
 def get_card_priority(card_name: str, priority_cards: Optional[Dict] = None) -> int:
     """
-    获取卡牌优先级
+    获取卡牌优先级（换牌阶段专用）
+
+    换牌时需要评估卡牌在整局游戏中的综合价值，因此使用进化前后优先级的平均值
 
     Args:
         card_name: 卡牌名称
-        priority_cards: 优先级配置字典 {"卡牌名": {"priority": 数字}}
+        priority_cards: 优先级配置字典 {"卡牌名": {"priority_pre_evolution": 数字, "priority_post_evolution": 数字, "priority": 数字}}
 
     Returns:
         int: 优先级数字（越小优先级越高，默认500）
     """
     if priority_cards and card_name in priority_cards:
-        return priority_cards[card_name].get('priority', 500)
+        cfg = priority_cards[card_name]
+
+        # 新格式：如果有双阶段优先级，取平均值
+        has_pre = 'priority_pre_evolution' in cfg
+        has_post = 'priority_post_evolution' in cfg
+
+        if has_pre and has_post:
+            # 两个都有，取平均值
+            avg = (cfg['priority_pre_evolution'] + cfg['priority_post_evolution']) / 2
+            return int(avg)
+        elif has_pre:
+            # 只有进化前优先级
+            return cfg['priority_pre_evolution']
+        elif has_post:
+            # 只有进化后优先级
+            return cfg['priority_post_evolution']
+        elif 'priority' in cfg:
+            # 向后兼容：使用旧的 priority
+            return cfg['priority']
+
     return 500
 
 

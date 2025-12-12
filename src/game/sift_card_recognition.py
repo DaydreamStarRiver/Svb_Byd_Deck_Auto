@@ -68,8 +68,13 @@ class SiftCardRecognition:
                         
                         # 使用PIL读取图片
                         pil_image = Image.open(card_file)
+
+                        # 确保图片为RGB模式（处理PAL8等调色板模式）
+                        if pil_image.mode != 'RGB' and pil_image.mode != 'RGBA':
+                            pil_image = pil_image.convert('RGB')
+
                         template = np.array(pil_image)
-                        
+
                         # 转换为BGR格式（OpenCV格式）
                         if len(template.shape) == 3 and template.shape[2] == 4:  # RGBA
                             template = cv2.cvtColor(template, cv2.COLOR_RGBA2BGR)

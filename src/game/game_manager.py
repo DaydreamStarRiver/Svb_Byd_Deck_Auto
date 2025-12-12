@@ -236,8 +236,7 @@ class GameManager:
                 max_followers=HP_MAX_FOLLOWERS
             )
 
-            if debug_flag:
-                logger.info(f"检测到 {len(detections)} 个敌方随从HP位置")
+            logger.info(f"检测到 {len(detections)} 个敌方随从HP位置")
 
             # Step 4: Recognize HP for each detection
             enemy_followers = []
@@ -274,8 +273,7 @@ class GameManager:
                 # Fallback to "99" if recognition completely failed
                 if not hp_value or hp_value in ["?", "error", "unknown", "none"]:
                     hp_value = "99"
-                    if debug_flag:
-                        logger.warning(f"HP识别失败，使用默认值99 (位置: x={center_x})")
+                    logger.warning(f"HP识别失败，使用默认值99 (位置: x={center_x})")
 
                 # Calculate global screen coordinates
                 enemy_x = x1 + center_x + ENEMY_FOLLOWER_OFFSET_X
@@ -286,8 +284,7 @@ class GameManager:
 
                 enemy_followers.append((enemy_x, enemy_y, "normal", hp_value))
 
-                if debug_flag:
-                    logger.info(f"随从 {idx+1}: HP={hp_value}, X={enemy_x}, Y={enemy_y}")
+                logger.info(f"随从 {idx+1}: HP={hp_value}, X={enemy_x}, Y={enemy_y}")
 
             # Debug visualization if requested
             if debug_flag and enemy_followers:
@@ -848,6 +845,11 @@ class GameManager:
                 tname = os.path.splitext(filename)[0]
                 try:
                     pil_img = Image.open(template_path)
+
+                    # 确保图片为RGB模式（处理PAL8等调色板模式）
+                    if pil_img.mode != 'RGB' and pil_img.mode != 'RGBA':
+                        pil_img = pil_img.convert('RGB')
+
                     template_img = np.array(pil_img)
                     if len(template_img.shape) == 3 and template_img.shape[2] == 4:
                         template_img = cv2.cvtColor(template_img, cv2.COLOR_RGBA2BGR)

@@ -626,19 +626,34 @@ class GameActions:
             self.device_state.logger.warning("未能识别到任何手牌")
             return
 
-        from src.config.card_priorities import get_high_priority_cards, get_card_priority
+        from src.config.card_priorities import (
+            get_high_priority_cards,
+            get_card_priority_pre_evolution,
+            get_card_priority_post_evolution,
+            is_evolution_unlocked
+        )
         high_priority_cards_cfg = get_high_priority_cards()
         high_priority_names = set(high_priority_cards_cfg.keys())
-        
+
+        # 根据进化是否解锁，动态选择优先级函数
+        if is_evolution_unlocked(self.device_state):
+            get_priority_fn = get_card_priority_post_evolution
+            priority_phase = "进化后"
+        else:
+            get_priority_fn = get_card_priority_pre_evolution
+            priority_phase = "进化前"
+
+        self.device_state.logger.info(f"使用{priority_phase}优先级策略")
+
         # 过滤掉当前回合需要忽略的卡牌
         filtered_cards = [c for c in cards if c.get('name', '') not in self._current_round_ignored_cards]
-        
+
         # 高优先级卡牌
         priority_cards = [c for c in filtered_cards if c.get('name', '') in high_priority_names]
         # 普通卡牌
         normal_cards = [c for c in filtered_cards if c.get('name', '') not in high_priority_names]
         # 高优先级卡牌排序：先按priority（数字小优先），再按费用从高到低
-        priority_cards.sort(key=lambda x: (get_card_priority(x.get('name', '')), -x.get('cost', 0)))
+        priority_cards.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
         # 普通卡牌按费用从高到低排序
         normal_cards.sort(key=lambda x: x.get('cost', 0), reverse=True)
         planned_cards = priority_cards + normal_cards
@@ -657,7 +672,7 @@ class GameActions:
                 
             if affordable_priority:
                 # 高优先级卡牌按priority和费用排序（priority小优先，费用高优先）
-                affordable_priority.sort(key=lambda x: (get_card_priority(x.get('name', '')), -x.get('cost', 0)))
+                affordable_priority.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
                 card_to_play = affordable_priority[0]
                 self.device_state.logger.info(f"检测到高优先级卡牌[{card_to_play.get('name', '未知')}]，优先打出")
             elif normal_zero_cost:
@@ -1024,7 +1039,7 @@ class GameActions:
                             f"[Fallback] 第{attempt+1}次识别: 未检测到卡牌"
                         )
                         if attempt < max_retries - 1:
-                            time.sleep(0.3)
+                            time.sleep(0.5)
                             screenshot = self.device_state.take_screenshot()
                             if screenshot is None:
                                 continue
@@ -1047,7 +1062,7 @@ class GameActions:
                             f"[Fallback] 第{attempt+1}次识别失败: {reason}"
                         )
                         if attempt < max_retries - 1:
-                            time.sleep(0.3)
+                            time.sleep(0.5)
                             screenshot = self.device_state.take_screenshot()
                             if screenshot is None:
                                 continue
@@ -1272,16 +1287,14 @@ class GameActions:
                 card_names = [f"{c['cost']}费_{c['name']}" for c in cards]
                 self.device_state.logger.info(f"[SIFT换牌] 识别到手牌: {' | '.join(card_names)}")
 
-                # Debug: 输出详细位置信息
-                if debug_flag:
-                    for i, card in enumerate(cards):
-                        cx, cy = card['center']
-                        self.device_state.logger.debug(
-                            f"  [位置{i+1}] {card['name']} | "
-                            f"费用:{card['cost']} | "
-                            f"坐标:({cx},{cy}) | "
-                            f"置信度:{card.get('confidence', 0):.3f}"
-                        )
+                for i, card in enumerate(cards):
+                    cx, cy = card['center']
+                    self.device_state.logger.debug(
+                        f"  [位置{i+1}] {card['name']} | "
+                        f"费用:{card['cost']} | "
+                        f"坐标:({cx},{cy}) | "
+                        f"置信度:{card.get('confidence', 0):.3f}"
+                    )
 
                 # 4. 获取配置的策略
                 config_manager = ConfigManager()

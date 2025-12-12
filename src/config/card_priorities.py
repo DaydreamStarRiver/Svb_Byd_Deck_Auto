@@ -130,4 +130,70 @@ def get_evolve_special_actions():
 def is_evolve_special_action_card(card_name):
     """检查是否为进化/超进化特殊操作卡牌"""
     from src.game.evolution_special_actions import is_evolve_special_action_card
-    return is_evolve_special_action_card(card_name) 
+    return is_evolve_special_action_card(card_name)
+
+def get_card_priority_pre_evolution(card_name):
+    """
+    获取卡牌在进化解锁前的优先级（数字越小优先级越高）
+    用于：换牌阶段（回合0）和前期出牌（回合1-3/4）
+
+    Args:
+        card_name: 卡牌名称
+
+    Returns:
+        int: 优先级数字（越小优先级越高，默认999）
+    """
+    if card_name in _HIGH_PRIORITY_CARDS:
+        cfg = _HIGH_PRIORITY_CARDS[card_name]
+        # 优先读取新格式的 priority_pre_evolution
+        if "priority_pre_evolution" in cfg:
+            return cfg["priority_pre_evolution"]
+        # 向后兼容：如果没有新字段，使用旧的 priority
+        if "priority" in cfg:
+            return cfg["priority"]
+    return 999  # 默认低优先级
+
+def get_card_priority_post_evolution(card_name):
+    """
+    获取卡牌在进化解锁后的优先级（数字越小优先级越高）
+    用于：中后期出牌（回合4/5+，进化解锁后）
+
+    Args:
+        card_name: 卡牌名称
+
+    Returns:
+        int: 优先级数字（越小优先级越高，默认999）
+    """
+    if card_name in _HIGH_PRIORITY_CARDS:
+        cfg = _HIGH_PRIORITY_CARDS[card_name]
+        # 优先读取新格式的 priority_post_evolution
+        if "priority_post_evolution" in cfg:
+            return cfg["priority_post_evolution"]
+        # 向后兼容：如果没有新字段，使用旧的 priority
+        if "priority" in cfg:
+            return cfg["priority"]
+    return 999  # 默认低优先级
+
+def is_evolution_unlocked(device_state):
+    """
+    判断当前回合进化是否已解锁
+
+    Args:
+        device_state: DeviceState 对象，包含回合数和先后手信息
+
+    Returns:
+        bool: True=进化已解锁，False=进化未解锁
+    """
+    # 如果还没检测到先后手，假定未解锁
+    if device_state.extra_cost_available_this_match is None:
+        return False
+
+    # 后手（有额外费用点）：回合4开始进化解锁
+    if device_state.extra_cost_available_this_match is True:
+        return device_state.current_round_count >= 4
+
+    # 先手（无额外费用点）：回合5开始进化解锁
+    if device_state.extra_cost_available_this_match is False:
+        return device_state.current_round_count >= 5
+
+    return False
