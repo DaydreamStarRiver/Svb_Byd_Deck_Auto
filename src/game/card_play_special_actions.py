@@ -107,6 +107,9 @@ SPECIAL_CARDS = {
     "威严的星晶骑士·薇拉": {
         "target_type": "double_enemy"  # 目标类型：双随从
     },
+    "伟大之术": {
+        "target_type": "enemy_player"  # 目标类型：敌方玩家
+    },
     "命运黄昏·奥丁": {
         "target_type": "shield_or_highest_hp"  # 目标类型：护盾或最高血量
     },
@@ -162,7 +165,7 @@ class CardPlaySpecialActions:
             human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
             time.sleep(0.2)  # 等待
             
-            # 根据选择的选项执行相应的坐标点击操作
+            # 根据选择的选项执行相应的操作
             if mode_option == "选项1":
                 # 执行坐标点击操作：click_x, click_y = 748, 328
                 click_x, click_y = 748, 328
@@ -183,6 +186,22 @@ class CardPlaySpecialActions:
                 self.device_state.u2_device.click(click_x+random.randint(-15, 15), click_y+random.randint(-2, 2))
                 # 等待点击响应
                 time.sleep(0.5)
+            elif mode_option == "enemy_player":
+                # 调用enemy_player函数
+                self.device_state.logger.info(f"执行出牌特殊操作：点击敌方玩家")
+                self._handle_enemy_player_target(card_name, center_x, center_y, target_x)
+            elif mode_option == "double_enemy":
+                # 调用double_enemy函数
+                self.device_state.logger.info(f"执行出牌特殊操作：点击敌方双随从")
+                self._handle_double_destroy(card_name, center_x, center_y, target_x)
+            elif mode_option == "shield_or_highest_hp":
+                # 调用shield_or_highest_hp函数
+                self.device_state.logger.info(f"执行出牌特殊操作：点击护盾或最高血量")
+                self._handle_shield_or_highest_hp_target(card_name, center_x, center_y, target_x)
+            elif mode_option == "enemy_followers_hp_less_than_6":
+                # 调用enemy_followers_hp_less_than_6函数
+                self.device_state.logger.info(f"执行出牌特殊操作：点击血量小于6的敌方随从")
+                self._handle_enemy_followers_hp_less_than_6_target(card_name, center_x, center_y, target_x)
             # 空选项不需要处理，按正常流程执行
         else:
             # 检查是否为特殊处理卡牌
@@ -578,7 +597,7 @@ class CardPlaySpecialActions:
             # 不是进化模式卡牌，返回False
             return False
         
-        # 根据选择的选项执行相应的坐标点击操作
+        # 根据选择的选项执行相应的操作
         if mode_option == "选项1":
             # 执行坐标点击操作：click_x, click_y = 748, 328
             click_x, click_y = 748, 328
@@ -599,5 +618,17 @@ class CardPlaySpecialActions:
             self.device_state.u2_device.click(click_x+random.randint(-15, 15), click_y+random.randint(-2, 2))
             # 等待点击响应
             time.sleep(0.5)
+        elif mode_option == "attack_enemy_follower_hp_less_than_4":
+            # 调用attack_enemy_follower_hp_less_than_4函数
+            self.device_state.logger.info(f"执行进化特殊操作：点击血量小于4的敌方随从")
+            from .evolution_special_actions import EvolutionSpecialActions
+            evolve_actions = EvolutionSpecialActions(self.device_state)
+            evolve_actions._handle_attack_enemy_follower_hp_less_than_4(card_name)
+        elif mode_option == "attack_two_enemy_followers_hp_highest":
+            # 调用attack_two_enemy_followers_hp_highest函数
+            self.device_state.logger.info(f"执行进化特殊操作：点击血量最高的敌方随从")
+            from .evolution_special_actions import EvolutionSpecialActions
+            evolve_actions = EvolutionSpecialActions(self.device_state)
+            evolve_actions._handle_attack_two_enemy_followers_hp_highest(card_name)
         # 空选项不需要处理
         return True 

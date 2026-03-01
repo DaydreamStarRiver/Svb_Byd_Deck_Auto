@@ -1864,7 +1864,7 @@ class CardPriorityPage(QWidget):
 
         # 说明文字和帮助按钮
         desc_layout = QHBoxLayout()
-        desc_label = QLabel("为卡组中的卡片设置优先级和模式选项。数字越小优先级越高，优先级上限是999（默认所有卡牌999）。出牌优先级支持进化前/进化后两个阶段。模式选项默认是空选项（不执行任何特殊操作）。")
+        desc_label = QLabel("为卡组中的卡片设置优先级和出牌选项。数字越小优先级越高，优先级上限是999（默认所有卡牌999）。出牌优先级支持进化前/进化后两个阶段。出牌选项默认是空选项（不执行任何特殊操作）。")
         desc_label.setStyleSheet("font-size: 12px; color: #AACCFF;")
         desc_layout.addWidget(desc_label)
         desc_layout.addStretch()
@@ -1925,20 +1925,20 @@ class CardPriorityPage(QWidget):
    默认值：999（最低优先级）
    示例：进化时会优先选择进化优先级更高（数字更小）的随从
 
-二、模式选项设置
+二、出牌选项设置
 
-1. 模式选项
-   作用：为双选择的模式卡牌选择对应的选项
-   空选项：不会把这张卡认作模式卡，将以普通卡牌处理
+1. 出牌选项
+   作用：为双选择的卡牌选择对应的选项
+   空选项：不会把这张卡认作出牌选项卡，将以普通卡牌处理
 
 2. 进化选项
-   作用：为双选择的模式卡牌选择进化时对于的选项
-   空选项：不会把这张卡认作进化时模式卡，将以普通卡牌处理
-   
+   作用：为双选择的卡牌选择进化时对应的选项
+   空选项：不会把这张卡认作进化时出牌选项卡，将以普通卡牌处理
+
 
 建议及后续更新：
-   1. 模式选项和进化选项的设置是独立的，互不影响
-   2. 为了避免错误操作，建议先设置好优先级，再设置模式选项和进化选项
+   1. 出牌选项和进化选项的设置是独立的，互不影响
+   2. 为了避免错误操作，建议先设置好优先级，再设置出牌选项和进化选项
    3. 后续如果会有空，会添加三模式或四模式卡牌的选项设置（不保证一定有）
 """
         # 创建消息框
@@ -2055,15 +2055,26 @@ class CardPriorityPage(QWidget):
                 evolve_priority_input.setText(str(evolve_priority.get("priority", "")))
             row_layout.addWidget(evolve_priority_input)
 
-            # 添加模式选项下拉菜单
-            row_layout.addWidget(QLabel("模式选项:"))
+            # 添加出牌选项下拉菜单
+            row_layout.addWidget(QLabel("出牌选项:"))
             mode_combo = QComboBox()
-            mode_combo.addItems(["空选项", "选项1", "选项2"])
+            mode_combo.addItems(["空选项", "模式1", "模式2", "点击敌方玩家", "点击敌方双随从", "点击护盾或最高血量", "点击血量小于6的敌方随从"])
             mode_combo.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
-            mode_combo.setMaximumWidth(80)
-            # 加载当前模式选项设置
+            mode_combo.setMinimumWidth(150)
+            # 加载当前出牌选项设置
             mode_option = self.config_data.get("card_mode_options", {}).get(card_name, "空选项")
-            index = mode_combo.findText(mode_option)
+            # 转换选项格式
+            if mode_option == "enemy_player":
+                display_option = "点击敌方玩家"
+            elif mode_option == "double_enemy":
+                display_option = "点击敌方双随从"
+            elif mode_option == "shield_or_highest_hp":
+                display_option = "点击护盾或最高血量"
+            elif mode_option == "enemy_followers_hp_less_than_6":
+                display_option = "点击血量小于6的敌方随从"
+            else:
+                display_option = mode_option
+            index = mode_combo.findText(display_option)
             if index >= 0:
                 mode_combo.setCurrentIndex(index)
             row_layout.addWidget(mode_combo)
@@ -2071,16 +2082,20 @@ class CardPriorityPage(QWidget):
             # 添加进化模式选项下拉菜单
             row_layout.addWidget(QLabel("进化选项:"))
             evolve_mode_combo = QComboBox()
-            evolve_mode_combo.addItems(["空选项", "选项1 (进化)", "选项2 (进化)"])
+            evolve_mode_combo.addItems(["空选项", "模式1 (进化)", "模式2 (进化)", "点击血量小于4的敌方随从", "点击血量最高的敌方随从"])
             evolve_mode_combo.setStyleSheet("background-color: rgba(80, 80, 120, 180); color: white;")
-            evolve_mode_combo.setMaximumWidth(100)
+            evolve_mode_combo.setMinimumWidth(150)
             # 加载当前进化模式选项设置
             evolve_mode_option = self.config_data.get("card_evolve_mode_options", {}).get(card_name, "空选项")
             # 转换进化模式选项格式
-            if evolve_mode_option == "选项1":
-                display_option = "选项1 (进化)"
-            elif evolve_mode_option == "选项2":
-                display_option = "选项2 (进化)"
+            if evolve_mode_option == "模式1":
+                display_option = "模式1 (进化)"
+            elif evolve_mode_option == "模式2":
+                display_option = "模式2 (进化)"
+            elif evolve_mode_option == "attack_enemy_follower_hp_less_than_4":
+                display_option = "点击血量小于4的敌方随从"
+            elif evolve_mode_option == "attack_two_enemy_followers_hp_highest":
+                display_option = "点击血量最高的敌方随从"
             else:
                 display_option = "空选项"
             index = evolve_mode_combo.findText(display_option)
@@ -2179,18 +2194,33 @@ class CardPriorityPage(QWidget):
                 except Exception as e:
                     QMessageBox.warning(self, "输入错误", f"卡片 '{card_name}' 的进化优先级设置错误: {str(e)}")
                     return
-            # 保存模式选项
+            # 保存出牌选项
             mode_option = card["mode_option"].currentText()
-            if mode_option != "空选项":
-                card_mode_options[card_name] = mode_option
+            # 转换选项格式
+            if mode_option == "点击敌方玩家":
+                save_option = "enemy_player"
+            elif mode_option == "点击敌方双随从":
+                save_option = "double_enemy"
+            elif mode_option == "点击护盾或最高血量":
+                save_option = "shield_or_highest_hp"
+            elif mode_option == "点击血量小于6的敌方随从":
+                save_option = "enemy_followers_hp_less_than_6"
+            else:
+                save_option = mode_option
+            if save_option != "空选项":
+                card_mode_options[card_name] = save_option
             
             # 保存进化模式选项
             evolve_mode_option = card["evolve_mode_option"].currentText()
-            # 转换进化模式选项格式，去除" (进化)"后缀
-            if evolve_mode_option == "选项1 (进化)":
-                save_option = "选项1"
-            elif evolve_mode_option == "选项2 (进化)":
-                save_option = "选项2"
+            # 转换进化模式选项格式
+            if evolve_mode_option == "模式1 (进化)":
+                save_option = "模式1"
+            elif evolve_mode_option == "模式2 (进化)":
+                save_option = "模式2"
+            elif evolve_mode_option == "点击血量小于4的敌方随从":
+                save_option = "attack_enemy_follower_hp_less_than_4"
+            elif evolve_mode_option == "点击血量最高的敌方随从":
+                save_option = "attack_two_enemy_followers_hp_highest"
             else:
                 save_option = "空选项"
             if save_option != "空选项":
