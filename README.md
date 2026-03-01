@@ -77,7 +77,7 @@
 
 4. 运行开发版本：
    ```powershell
-   python main_ui.py
+   python -m PyInstaller main.spec
    ```
 
 ### 项目结构
