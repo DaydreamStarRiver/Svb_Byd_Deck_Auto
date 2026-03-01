@@ -161,13 +161,12 @@ class CardPlaySpecialActions:
             mode_option = card_mode_options[card_name]
             self.device_state.logger.info(f"检测到模式卡牌{card_name}，选项: {mode_option}")
             
-            # 划出卡牌
-            human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
-            time.sleep(0.2)  # 等待
-            
-            # 根据选择的选项执行相应的操作
+            # 根据选择的选项执行相应的操作 - 先扫描再出牌
             if mode_option == "选项1":
                 # 执行坐标点击操作：click_x, click_y = 748, 328
+                # 先划出卡牌
+                human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
+                time.sleep(0.2)  # 等待
                 click_x, click_y = 748, 328
                 self.device_state.logger.info(f"执行选项1操作，点击坐标: ({click_x}, {click_y})")
                 # 等待卡牌动画完成
@@ -178,6 +177,9 @@ class CardPlaySpecialActions:
                 time.sleep(0.5)
             elif mode_option == "选项2":
                 # 执行坐标点击操作：click_x, click_y = 724, 429
+                # 先划出卡牌
+                human_like_drag(self.device_state.u2_device, center_x, center_y, target_x, 400)
+                time.sleep(0.2)  # 等待
                 click_x, click_y = 724, 429
                 self.device_state.logger.info(f"执行选项2操作，点击坐标: ({click_x}, {click_y})")
                 # 等待卡牌动画完成
