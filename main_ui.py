@@ -275,7 +275,7 @@ class ConfigPage(QWidget):
             "run_settings": {
                 "max_run_duration": int(self.run_duration_input.text()) * 60,  # 转换为秒
                 "max_battle_count": int(self.battle_count_input.text()),
-                "force_close": True
+                "force_close": False
             }
         }
         return config
@@ -2159,7 +2159,7 @@ class CardPriorityPage(QWidget):
             "run_settings": {
                 "max_run_duration": int(self.run_duration_input.text()) * 60,  # 转换为秒
                 "max_battle_count": int(self.battle_count_input.text()),
-                "force_close": True
+                "force_close": False
             }
         }
         return config

@@ -11,6 +11,7 @@ import threading
 import traceback
 import time
 import queue
+import shutil
 from typing import Dict, Any, Optional
 
 # 设置环境变量以避免PyTorch的pin_memory警告
@@ -193,9 +194,82 @@ def main(enable_command_listener=True):
         print(f"程序崩溃: {str(e)}")
         traceback.print_exc()
     finally:
+        # 清理PyInstaller临时文件
+        cleanup_pyinstaller_temp()
         # 在控制台保持打开
         input("按回车键退出...")
         sys.exit(0)
+
+
+def cleanup_pyinstaller_temp():
+    """清理PyInstaller临时文件，解决打包后临时文件残留导致的问题"""
+    try:
+        # 检查是否为PyInstaller打包环境
+        if not hasattr(sys, '_MEIPASS'):
+            return
+        
+        # 清理多个可能的临时目录
+        temp_dirs_to_check = []
+        
+        # 1. 可执行文件所在目录
+        exe_dir = os.path.dirname(sys.executable)
+        if exe_dir:
+            temp_dirs_to_check.append(exe_dir)
+        
+        # 2. 系统临时目录（用户提到的）
+        import tempfile
+        system_temp_dir = tempfile.gettempdir()
+        if system_temp_dir:
+            temp_dirs_to_check.append(system_temp_dir)
+        
+        # 3. 用户临时目录（Windows特定）
+        if sys.platform.startswith('win'):
+            user_temp_dir = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Temp')
+            if os.path.exists(user_temp_dir):
+                temp_dirs_to_check.append(user_temp_dir)
+        
+        # 遍历所有临时目录进行清理
+        for temp_dir in temp_dirs_to_check:
+            if not os.path.exists(temp_dir):
+                continue
+            
+            print(f"正在检查临时目录: {temp_dir}")
+            
+            try:
+                # 清理以_MEI开头的临时文件夹
+                for item in os.listdir(temp_dir):
+                    item_path = os.path.join(temp_dir, item)
+                    try:
+                        if os.path.isdir(item_path) and item.startswith('_MEI'):
+                            print(f"正在清理PyInstaller临时文件夹: {item_path}")
+                            try:
+                                shutil.rmtree(item_path, ignore_errors=True)
+                                print(f"已清理: {item_path}")
+                            except Exception as e:
+                                print(f"清理临时文件夹失败: {item_path}, 错误: {str(e)}")
+                    except Exception:
+                        continue
+                
+                # 清理mei相关文件（用户提到的）
+                for item in os.listdir(temp_dir):
+                    item_path = os.path.join(temp_dir, item)
+                    try:
+                        if os.path.isfile(item_path) and 'mei' in item.lower():
+                            print(f"正在清理PyInstaller临时文件: {item_path}")
+                            try:
+                                os.remove(item_path)
+                                print(f"已清理: {item_path}")
+                            except Exception as e:
+                                print(f"清理临时文件失败: {item_path}, 错误: {str(e)}")
+                    except Exception:
+                        continue
+            except Exception as e:
+                print(f"处理临时目录 {temp_dir} 时出错: {str(e)}")
+                continue
+                
+    except Exception as e:
+        print(f"清理PyInstaller临时文件时出错: {str(e)}")
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
