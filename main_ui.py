@@ -275,7 +275,7 @@ class ConfigPage(QWidget):
             "run_settings": {
                 "max_run_duration": int(self.run_duration_input.text()) * 60,  # 转换为秒
                 "max_battle_count": int(self.battle_count_input.text()),
-                "force_close": False
+                "force_close": True
             }
         }
         return config
@@ -1862,6 +1862,12 @@ class CardPriorityPage(QWidget):
         title_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(title_label)
 
+        # 红色提示文字
+        warning_label = QLabel("每次修改完卡牌设置并且保存过后。请重启脚本，否则新设置将不会生效！！")
+        warning_label.setStyleSheet("font-size: 14px; color: #FF4444; font-weight: bold;")
+        warning_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(warning_label)
+
         # 说明文字和帮助按钮
         desc_layout = QHBoxLayout()
         desc_label = QLabel("为卡组中的卡片设置优先级和出牌选项。数字越小优先级越高，优先级上限是999（默认所有卡牌999）。出牌优先级支持进化前/进化后两个阶段。出牌选项默认是空选项（不执行任何特殊操作）。")
@@ -2159,7 +2165,7 @@ class CardPriorityPage(QWidget):
             "run_settings": {
                 "max_run_duration": int(self.run_duration_input.text()) * 60,  # 转换为秒
                 "max_battle_count": int(self.battle_count_input.text()),
-                "force_close": False
+                "force_close": True
             }
         }
         return config

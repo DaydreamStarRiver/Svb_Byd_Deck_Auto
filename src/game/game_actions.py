@@ -1496,13 +1496,13 @@ class GameActions:
                 shot_delay_range=shot_delay_range,
                 debug_flag=debug_flag,
             )
+            self.follower_manager.update_positions(followers)
             if followers:
-                self.follower_manager.update_positions(followers)
                 return followers
             if attempt < retries:
                 time.sleep(random.uniform(0.12, 0.22))
 
-        return self.follower_manager.get_positions()
+        return []
 
     def _scan_our_followers(
         self,
