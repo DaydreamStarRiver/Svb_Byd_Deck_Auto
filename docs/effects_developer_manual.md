@@ -90,6 +90,7 @@ Step3A 的目标：
 - `select_option`
 - `select_targets`
 - `cancel_action`
+- `disallow_empty_evolve`（运行时 no-op；由进化决策读取）
 - `legacy_action`（兼容 action 字符串）
 
 ### 4.3 TargetResolver
@@ -128,6 +129,7 @@ Step3A 的目标：
 - 读取并归一化 op
 - 为避免旧卡牌顺序问题，会把 `select_option` 移到最后执行
 - 运行完 op 后，如果没有配置 `select_option`，才走旧的 `handle_evolve_mode_option`（读取 `card_evolve_mode_options/card_mode_options`）
+- `disallow_empty_evolve` 是随从触发专用标记：`LegacyBattlePolicy.should_evolve()` 在无敌方随从、仅靠疾驰/优先进化随从判断是否进化时，会按当前可用的进化/超进化点检查对应触发；含该 op 的触发不计入空场进化理由。`GameActions.perform_evolution_actions()` 在空场时也会跳过对应触发；引擎遇到该 op 时返回成功但不执行动作。
 
 ### 5.3 on_attack
 

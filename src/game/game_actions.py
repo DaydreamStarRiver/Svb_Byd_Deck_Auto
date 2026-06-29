@@ -24,6 +24,7 @@ from src.config.card_priorities import (
     is_evolution_unlocked,
     is_evolve_priority_card,
 )
+from src.config.strategy_effects import card_effect_has_op
 from src.game.drag_utils import human_like_drag
 from src.utils.image_io import safe_imread
 
@@ -88,8 +89,6 @@ class GameActions:
         # Round-local state used by card-play flow.
         self._banlist_blocked_this_round = False
         self._current_round_ignored_cards: set[str] = set()
-        self._request_extra_hand_scan = False
-        self._request_extra_hand_scan_only_when_cost_empty = True
         self._current_extra_cost_bonus = 0
         self._last_played_card = ""
         self._should_not_consume_cost = False
@@ -1884,6 +1883,58 @@ class GameActions:
                 return follower_type, follower_name
         return None, None
 
+    def _is_enemy_board_empty_for_evolve(self) -> bool:
+        cached_enemy_presence = getattr(self, "_cached_enemy_presence_for_evolve", None)
+        if cached_enemy_presence is not None:
+            return not bool(cached_enemy_presence)
+
+        screenshot = self.device_state.take_screenshot()
+        if screenshot is None:
+            return False
+        try:
+            return not bool(self._scan_enemy_ATK(screenshot))
+        except Exception:
+            return False
+
+    def _disallows_empty_evolve_trigger(
+        self,
+        follower_name: Optional[str],
+        *,
+        trigger: str,
+        runtime_cfg: Optional[dict[str, object]],
+    ) -> bool:
+        name = str(follower_name or "")
+        if not name:
+            return False
+        return card_effect_has_op(
+            runtime_cfg,
+            card_name=name,
+            trigger=trigger,
+            op_id="disallow_empty_evolve",
+        )
+
+    def _disallows_all_available_empty_evolve(
+        self,
+        follower_name: Optional[str],
+        *,
+        runtime_cfg: Optional[dict[str, object]],
+    ) -> bool:
+        available_triggers: list[str] = []
+        if getattr(self.device_state, "super_evolution_point", 0) > 0:
+            available_triggers.append("on_super_evolve")
+        if getattr(self.device_state, "evolution_point", 0) > 0:
+            available_triggers.append("on_evolve")
+        if not available_triggers:
+            return False
+        return all(
+            self._disallows_empty_evolve_trigger(
+                follower_name,
+                trigger=trigger,
+                runtime_cfg=runtime_cfg,
+            )
+            for trigger in available_triggers
+        )
+
     def _mark_runtime_evolution(
         self,
         pos: tuple[int, int],
@@ -2122,6 +2173,7 @@ class GameActions:
         self._runtime_sync_ours(all_followers)
         runtime_cfg_raw = getattr(self.device_state, "config", None)
         runtime_cfg = runtime_cfg_raw if isinstance(runtime_cfg_raw, dict) else None
+        enemy_board_empty = self._is_enemy_board_empty_for_evolve()
 
         sorted_followers = self._sort_followers_for_evolution(all_followers, runtime_cfg)
 
@@ -2134,6 +2186,15 @@ class GameActions:
                 pos,
                 fallback_name=str(follower_name or ""),
             )
+            if enemy_board_empty and self._disallows_all_available_empty_evolve(
+                follower_name,
+                runtime_cfg=runtime_cfg,
+            ):
+                self.device_state.logger.info(
+                    f"[{follower_name}] 已配置不允许空场进化，跳过该随从"
+                )
+                continue
+
             # 点击该位置
             self._require_u2_device().click(pos[0], pos[1])
             self.device_state.sleep(0.3)  # 等待进化按钮出现
@@ -2149,7 +2210,14 @@ class GameActions:
             new_screenshot_np = np.array(new_screenshot)
             new_screenshot_cv = cv2.cvtColor(new_screenshot_np, cv2.COLOR_RGB2BGR)
 
-            if self._try_apply_super_evolution(
+            if not (
+                enemy_board_empty
+                and self._disallows_empty_evolve_trigger(
+                    follower_name,
+                    trigger="on_super_evolve",
+                    runtime_cfg=runtime_cfg,
+                )
+            ) and self._try_apply_super_evolution(
                 new_screenshot_cv,
                 pos,
                 follower_name=follower_name,
@@ -2160,7 +2228,14 @@ class GameActions:
             ):
                 break
 
-            if self._try_apply_normal_evolution(
+            if not (
+                enemy_board_empty
+                and self._disallows_empty_evolve_trigger(
+                    follower_name,
+                    trigger="on_evolve",
+                    runtime_cfg=runtime_cfg,
+                )
+            ) and self._try_apply_normal_evolution(
                 new_screenshot_cv,
                 pos,
                 follower_name=follower_name,
@@ -2447,8 +2522,6 @@ class GameActions:
         self._current_round_ignored_cards = set()
         # 同名牌连续出牌计数器
         card_attempt_count: Dict[str, int] = {}
-        self._request_extra_hand_scan = False
-        self._request_extra_hand_scan_only_when_cost_empty = True
         self.device_state.logger.info(f"当前回合：{current_round}，可用费用: {available_cost}")
 
         hand_manager = self.hand_manager
@@ -2475,13 +2548,11 @@ class GameActions:
         self._last_observed_hand_cards = list(cards)
 
         from src.config.card_priorities import (
-            get_high_priority_cards,
             get_card_priority_pre_evolution,
             get_card_priority_post_evolution,
             is_evolution_unlocked
         )
         runtime_cfg = getattr(self.device_state, "config", None)
-        high_priority_cards_cfg = get_high_priority_cards(runtime_cfg)
 
         from src.utils.card_filename import make_enhance_key
 
@@ -2631,7 +2702,7 @@ class GameActions:
             ):
                 return planned_cards_local, retry_count_local, False, False
 
-            time.sleep(0.30)
+            time.sleep(0.60)
             self._require_u2_device().click(
                 SHOW_CARDS_BUTTON[0] + random.randint(-2, 2),
                 SHOW_CARDS_BUTTON[1] + random.randint(-2, 2),
@@ -2762,191 +2833,10 @@ class GameActions:
             if should_continue:
                 continue
 
-        # 通用额外扫描：由 on_play 特效显式请求，不再按卡名硬编码。
-        need_extra_scan = bool(getattr(self, "_request_extra_hand_scan", False))
-        only_when_cost_empty = bool(
-            getattr(self, "_request_extra_hand_scan_only_when_cost_empty", True)
-        )
-        if need_extra_scan and (not only_when_cost_empty or int(remain_cost or 0) <= 0):
-            extra_cost = self._extra_scan_after_add_newcards(
-                hand_manager,
-                high_priority_cards_cfg,
-                str(getattr(self, "_last_played_card", "") or ""),
-            )
-            total_cost_used += extra_cost  # 添加额外扫描打出的费用
-
         if not hasattr(self.device_state, 'cost_history'):
             self.device_state.cost_history = []
         self.device_state.cost_history.append(total_cost_used)
         self.device_state.logger.info(f"本回合出牌完成，消耗{total_cost_used}费 (可用费用: {available_cost})")
-
-    def _extra_scan_after_add_newcards(self, hand_manager, _high_priority_cards_cfg, trigger_card_name=""):
-        """按特效请求触发的额外手牌扫描逻辑。"""
-        # 与主出牌逻辑保持一致：根据进化是否解锁选择对应阶段的优先级
-        if is_evolution_unlocked(self.device_state):
-            get_priority_fn = get_card_priority_post_evolution
-        else:
-            get_priority_fn = get_card_priority_pre_evolution
-
-        trigger_name = str(trigger_card_name or "")
-        if trigger_name:
-            self.device_state.logger.info(f"[{trigger_name}] 触发额外扫描一次手牌")
-        else:
-            self.device_state.logger.info("触发额外扫描一次手牌")
-        time.sleep(0.15)
-        # 点击展牌位置
-        self._require_u2_device().click(SHOW_CARDS_BUTTON[0] + random.randint(-2,2), SHOW_CARDS_BUTTON[1] + random.randint(-2,2))
-        time.sleep(0.15)
-        #移除手牌光标提高识别率
-        #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
-        time.sleep(0.7)
-        
-        new_cards = hand_manager.get_hand_cards_with_retry(max_retries=2, silent=True)
-        if new_cards:
-            # Update cache when recognition succeeds.
-            self._last_observed_hand_cards = list(new_cards)
-            card_info = []
-            for card in new_cards:
-                name = card.get('name', '未知')
-                cost = card.get('cost', 0)
-                center = card.get('center', (0, 0))
-                card_info.append(f"{cost}费_{name}({center[0]},{center[1]})")
-            self.device_state.logger.info(f"额外扫描手牌状态: {' | '.join(card_info)}")
-            
-            # 过滤掉当前回合需要忽略的卡牌
-            filtered_cards = [c for c in new_cards if c.get('name', '') not in self._current_round_ignored_cards]
-            
-            # 查找0费卡牌
-            zero_cost_cards = [c for c in filtered_cards if c.get('cost', 0) == 0]
-            if zero_cost_cards:
-                # 按优先级排序0费卡牌
-                priority_zero = [
-                    c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) != 999
-                ]
-                normal_zero = [
-                    c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) == 999
-                ]
-                priority_zero.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
-                normal_zero.sort(key=lambda x: x.get('cost', 0), reverse=True)
-                sorted_zero_cards = priority_zero + normal_zero
-                
-                # 打出第一个0费卡牌
-                card_to_play = sorted_zero_cards[0]
-                name = card_to_play.get('name', '未知')
-                cost = card_to_play.get('cost', 0)
-                self.device_state.logger.info(f"额外扫描发现0费卡牌，打出: {name} (费用: {cost})")
-                self._play_single_card(card_to_play)
-                # 记录最后打出的卡牌名称
-                self._last_played_card = name
-                return cost  # 返回打出的费用
-            else:
-                self.device_state.logger.info("额外扫描未发现0费卡牌，进行第二次扫描")
-                # 第二次扫描
-                time.sleep(0.3)
-                # 再次点击展牌位置
-                self._require_u2_device().click(SHOW_CARDS_BUTTON[0] + random.randint(-2,2), SHOW_CARDS_BUTTON[1] + random.randint(-2,2))
-                time.sleep(0.15)
-                #移除手牌光标提高识别率
-                #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
-                time.sleep(0.7)
-                
-                new_cards = hand_manager.get_hand_cards_with_retry(max_retries=3, silent=True)
-                if new_cards:
-                    # Update cache when recognition succeeds.
-                    self._last_observed_hand_cards = list(new_cards)
-                    card_info = []
-                    for card in new_cards:
-                        name = card.get('name', '未知')
-                        cost = card.get('cost', 0)
-                        center = card.get('center', (0, 0))
-                        card_info.append(f"{cost}费_{name}({center[0]},{center[1]})")
-                    self.device_state.logger.info(f"第二次额外扫描手牌状态: {' | '.join(card_info)}")
-                    
-                    # 过滤掉当前回合需要忽略的卡牌
-                    filtered_cards = [c for c in new_cards if c.get('name', '') not in self._current_round_ignored_cards]
-                    
-                    # 查找0费卡牌
-                    zero_cost_cards = [c for c in filtered_cards if c.get('cost', 0) == 0]
-                    if zero_cost_cards:
-                        # 按优先级排序0费卡牌
-                        priority_zero = [
-                            c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) != 999
-                        ]
-                        normal_zero = [
-                            c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) == 999
-                        ]
-                        priority_zero.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
-                        normal_zero.sort(key=lambda x: x.get('cost', 0), reverse=True)
-                        sorted_zero_cards = priority_zero + normal_zero
-                        
-                        # 打出第一个0费卡牌
-                        card_to_play = sorted_zero_cards[0]
-                        name = card_to_play.get('name', '未知')
-                        cost = card_to_play.get('cost', 0)
-                        self.device_state.logger.info(f"第二次额外扫描发现0费卡牌，打出: {name} (费用: {cost})")
-                        self._play_single_card(card_to_play)
-                        # 记录最后打出的卡牌名称
-                        self._last_played_card = name
-                        return cost  # 返回打出的费用
-                    else:
-                        self.device_state.logger.info("第二次额外扫描仍未发现0费卡牌")
-                else:
-                    self.device_state.logger.info("第二次额外扫描仍未检测到手牌")
-        else:
-            self.device_state.logger.info("额外扫描未检测到手牌，进行第二次扫描")
-            # 第二次扫描
-            time.sleep(0.2)
-            # 再次点击展牌位置
-            self._require_u2_device().click(SHOW_CARDS_BUTTON[0] + random.randint(-2,2), SHOW_CARDS_BUTTON[1] + random.randint(-2,2))
-            time.sleep(0.2)
-            #移除手牌光标提高识别率
-            #self.device_state.u2_device.click(DEFAULT_ATTACK_TARGET[0] + random.randint(-2,2), DEFAULT_ATTACK_TARGET[1] + random.randint(-2,2))
-            time.sleep(1.5)
-            
-            new_cards = hand_manager.get_hand_cards_with_retry(max_retries=3, silent=True)
-            if new_cards:
-                # Update cache when recognition succeeds.
-                self._last_observed_hand_cards = list(new_cards)
-                card_info = []
-                for card in new_cards:
-                    name = card.get('name', '未知')
-                    cost = card.get('cost', 0)
-                    center = card.get('center', (0, 0))
-                    card_info.append(f"{cost}费_{name}({center[0]},{center[1]})")
-                self.device_state.logger.info(f"第二次额外扫描手牌状态: {' | '.join(card_info)}")
-                
-                # 过滤掉当前回合需要忽略的卡牌
-                filtered_cards = [c for c in new_cards if c.get('name', '') not in self._current_round_ignored_cards]
-                
-                # 查找0费卡牌
-                zero_cost_cards = [c for c in filtered_cards if c.get('cost', 0) == 0]
-                if zero_cost_cards:
-                    # 按优先级排序0费卡牌
-                    priority_zero = [
-                        c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) != 999
-                    ]
-                    normal_zero = [
-                        c for c in zero_cost_cards if int(get_priority_fn(c.get('name', ''))) == 999
-                    ]
-                    priority_zero.sort(key=lambda x: (get_priority_fn(x.get('name', '')), -x.get('cost', 0)))
-                    normal_zero.sort(key=lambda x: x.get('cost', 0), reverse=True)
-                    sorted_zero_cards = priority_zero + normal_zero
-                    
-                    # 打出第一个0费卡牌
-                    card_to_play = sorted_zero_cards[0]
-                    name = card_to_play.get('name', '未知')
-                    cost = card_to_play.get('cost', 0)
-                    self.device_state.logger.info(f"第二次额外扫描发现0费卡牌，打出: {name} (费用: {cost})")
-                    self._play_single_card(card_to_play)
-                    # 记录最后打出的卡牌名称
-                    self._last_played_card = name
-                    return cost  # 返回打出的费用
-                else:
-                    self.device_state.logger.info("第二次额外扫描仍未发现0费卡牌")
-            else:
-                self.device_state.logger.info("第二次额外扫描仍未检测到手牌")
-        
-        return 0  # 没有打出卡牌，返回0
 
     def _play_single_card(self, card):
         """打出单张牌"""
@@ -2989,19 +2879,6 @@ class GameActions:
             # 将需要移除的标记存储到实例变量中，供调用方使用
             self._should_remove_from_hand = True
 
-        request_extra_scan = bool(
-            getattr(card_play_actions, "_request_extra_hand_scan", False)
-        )
-        if request_extra_scan:
-            self._request_extra_hand_scan = True
-            self._request_extra_hand_scan_only_when_cost_empty = bool(
-                getattr(
-                    card_play_actions,
-                    "_request_extra_hand_scan_only_when_cost_empty",
-                    True,
-                )
-            )
-        
         return result
 
     def _card_play_may_affect_enemy(self, card: Dict[str, Any]) -> bool:

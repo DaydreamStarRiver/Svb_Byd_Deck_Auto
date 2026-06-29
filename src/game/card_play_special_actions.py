@@ -18,8 +18,6 @@ class CardPlaySpecialActions:
     def __init__(self, device_state: Any):
         self.device_state = device_state
         self._extra_cost_bonus = 0
-        self._request_extra_hand_scan = False
-        self._request_extra_hand_scan_only_when_cost_empty = True
         self._should_not_consume_cost = False
         self._should_remove_from_hand = False
         self._preplay_origin_tag_attempted = False
@@ -28,8 +26,6 @@ class CardPlaySpecialActions:
     def play_single_card(self, card):
         """打出单张牌"""
         self._extra_cost_bonus = 0
-        self._request_extra_hand_scan = False
-        self._request_extra_hand_scan_only_when_cost_empty = True
         self._should_not_consume_cost = False
         self._should_remove_from_hand = False
         self._preplay_origin_tag_attempted = False
@@ -93,20 +89,6 @@ class CardPlaySpecialActions:
             except Exception:
                 bonus = 0
             self._extra_cost_bonus = int(bonus)
-
-            try:
-                req_scan = bool(getattr(ctx, "request_extra_hand_scan", False))
-            except Exception:
-                req_scan = False
-            self._request_extra_hand_scan = bool(req_scan)
-
-            try:
-                req_only_empty = bool(
-                    getattr(ctx, "request_extra_hand_scan_only_when_cost_empty", True)
-                )
-            except Exception:
-                req_only_empty = True
-            self._request_extra_hand_scan_only_when_cost_empty = bool(req_only_empty)
 
             # Unified failure policy for enemy_follower targeting:
             # - no cost consumption

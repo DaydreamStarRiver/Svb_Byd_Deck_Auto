@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from src.config.card_priorities import is_evolve_priority_card
+from src.config.strategy_effects import card_effect_has_op
 
 
 class _BattleActionsLike(Protocol):
@@ -28,6 +29,31 @@ class LegacyBattlePolicy:
     """Policy that preserves the current hardcoded evolve decision."""
 
     name = "legacy"
+
+    @staticmethod
+    def _allows_empty_evolve_for_active_trigger(ds: Any, follower_name: Any) -> bool:
+        name = str(follower_name or "")
+        if not name:
+            return True
+        config = getattr(ds, "config", None)
+
+        if getattr(ds, "super_evolution_point", 0) > 0 and not card_effect_has_op(
+            config,
+            card_name=name,
+            trigger="on_super_evolve",
+            op_id="disallow_empty_evolve",
+        ):
+            return True
+
+        if getattr(ds, "evolution_point", 0) > 0 and not card_effect_has_op(
+            config,
+            card_name=name,
+            trigger="on_evolve",
+            op_id="disallow_empty_evolve",
+        ):
+            return True
+
+        return False
 
     def should_evolve(self, actions: _BattleActionsLike) -> bool:
         ds = actions.device_state
@@ -62,7 +88,13 @@ class LegacyBattlePolicy:
                 our_followers = manager.get_positions() or []
         except Exception:
             our_followers = []
-        green_followers = [f for f in our_followers if len(f) > 2 and f[2] == "green"]
+        green_followers = [
+            f
+            for f in our_followers
+            if len(f) > 2
+            and f[2] == "green"
+            and self._allows_empty_evolve_for_active_trigger(ds, f[3] if len(f) > 3 else None)
+        ]
         if green_followers:
             ds.logger.info("检测到我方疾驰随从，满足进化/超进化条件")
             return True
@@ -72,6 +104,8 @@ class LegacyBattlePolicy:
             follower_name = follower[3] if len(follower) > 3 else None
             if follower_name and is_evolve_priority_card(
                 follower_name, getattr(ds, "config", None)
+            ) and self._allows_empty_evolve_for_active_trigger(
+                ds, follower_name
             ):
                 ds.logger.info(f"检测到优先进化随从[{follower_name}]，满足进化/超进化条件")
                 return True

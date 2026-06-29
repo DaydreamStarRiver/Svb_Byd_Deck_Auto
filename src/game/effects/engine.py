@@ -113,15 +113,12 @@ class EffectEngine:
             )
         if op_id == "cancel_action":
             return OperationExecutor.cancel_action(ctx)
+        if op_id == "disallow_empty_evolve":
+            return True
         if op_id == "add_cost_bonus":
             return OperationExecutor.add_cost_bonus(
                 ctx,
                 amount=step.get("amount", 0),
-            )
-        if op_id == "request_extra_hand_scan":
-            return OperationExecutor.request_extra_hand_scan(
-                ctx,
-                only_when_cost_empty=step.get("only_when_cost_empty", True),
             )
         if op_id == "buff":
             stat_ok = OperationExecutor.buff(

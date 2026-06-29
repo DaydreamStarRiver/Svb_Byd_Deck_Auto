@@ -130,22 +130,6 @@ class OperationExecutor:
         return True
 
     @staticmethod
-    def request_extra_hand_scan(ctx: Any, *, only_when_cost_empty: Any = True) -> bool:
-        ds = getattr(ctx, "device_state", None)
-        flag = bool(only_when_cost_empty)
-        setattr(ctx, "request_extra_hand_scan", True)
-        setattr(ctx, "request_extra_hand_scan_only_when_cost_empty", flag)
-        try:
-            if ds is not None:
-                ds.logger.info(
-                    "[Effect] request_extra_hand_scan "
-                    f"only_when_cost_empty={bool(flag)}"
-                )
-        except Exception:
-            pass
-        return True
-
-    @staticmethod
     def buff(
         ctx: Any,
         *,

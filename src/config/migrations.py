@@ -365,6 +365,92 @@ def migrate_strategy_split_attack_times_buff(config: Dict[str, Any]) -> bool:
     return changed
 
 
+def prune_invalid_strategy_effect_ops(config: Dict[str, Any]) -> bool:
+    """Drop effect steps that are not valid for the current registry.
+
+    This is intentionally run at config load/save boundaries so older configs can
+    contain removed ops without breaking runtime, and the next save rewrites the
+    config without those invalid clauses.
+    """
+
+    strategy = config.get("strategy")
+    if not isinstance(strategy, dict):
+        return False
+    effects = strategy.get("effects")
+    if not isinstance(effects, dict):
+        return False
+
+    try:
+        from src.config.effects_registry import OPERATIONS, TRIGGERS
+    except Exception:
+        return False
+
+    trigger_context: Dict[str, str] = {}
+    for row in list(TRIGGERS or []):
+        if not isinstance(row, dict):
+            continue
+        tid = str(row.get("id") or "")
+        ctx = str(row.get("context_kind") or "")
+        if tid and ctx:
+            trigger_context[tid] = ctx
+
+    op_contexts: Dict[str, set[str]] = {}
+    for row in list(OPERATIONS or []):
+        if not isinstance(row, dict):
+            continue
+        oid = str(row.get("op_id") or "")
+        contexts_raw = row.get("supported_context_kinds")
+        if not oid or not isinstance(contexts_raw, list):
+            continue
+        contexts = {str(v) for v in contexts_raw if str(v or "")}
+        if contexts:
+            op_contexts[oid] = contexts
+
+    changed = False
+
+    for card_name, card_eff in list(effects.items()):
+        if not isinstance(card_eff, dict):
+            del effects[card_name]
+            changed = True
+            continue
+
+        for trigger, steps in list(card_eff.items()):
+            trigger_id = str(trigger or "")
+            context_kind = trigger_context.get(trigger_id)
+            if not context_kind or not isinstance(steps, list):
+                del card_eff[trigger]
+                changed = True
+                continue
+
+            cleaned = []
+            for step in list(steps or []):
+                if not isinstance(step, dict):
+                    changed = True
+                    continue
+                op_id = str(step.get("op") or "")
+                if not op_id:
+                    changed = True
+                    continue
+                supported_contexts = op_contexts.get(op_id)
+                if not supported_contexts or context_kind not in supported_contexts:
+                    changed = True
+                    continue
+                cleaned.append(step)
+
+            if cleaned != steps:
+                if cleaned:
+                    card_eff[trigger] = cleaned
+                else:
+                    del card_eff[trigger]
+                changed = True
+
+        if not card_eff:
+            del effects[card_name]
+            changed = True
+
+    return changed
+
+
 def migrate_strategy_name_keys(config: Dict[str, Any]) -> bool:
     """Normalize strategy-related card keys to suffix-free base naming.
 

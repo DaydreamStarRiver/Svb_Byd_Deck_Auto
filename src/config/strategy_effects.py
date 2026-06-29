@@ -279,6 +279,8 @@ def _step_effect_signature(step: Dict[str, Any]) -> Optional[tuple[Any, ...]]:
         return ("select_option_by_our_followers",)
     if op == "cancel_action":
         return ("cancel_action",)
+    if op == "disallow_empty_evolve":
+        return ("disallow_empty_evolve",)
     if op == "legacy_target_type":
         return ("legacy_target_type", str(step.get("target_type") or ""))
     if op == "legacy_action":
@@ -536,6 +538,12 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
                     normalized["on_error"] = step.get("on_error")
                 ops.append(normalized)
                 continue
+            if op_id == "disallow_empty_evolve":
+                normalized: Dict[str, Any] = {"op": "disallow_empty_evolve"}
+                if step.get("on_error"):
+                    normalized["on_error"] = step.get("on_error")
+                ops.append(normalized)
+                continue
             ops.append(dict(step))
             continue
 
@@ -562,6 +570,24 @@ def get_card_effect_ops(
     return normalize_effect_steps_to_ops(
         get_card_effect_steps(config, card_name=card_name, trigger=trigger)
     )
+
+
+def card_effect_has_op(
+    config: Dict[str, Any] | None,
+    *,
+    card_name: str,
+    trigger: str,
+    op_id: str,
+) -> bool:
+    """Return whether a card trigger contains a normalized operation."""
+
+    oid = str(op_id or "")
+    if not oid:
+        return False
+    for step in get_card_effect_ops(config, card_name=card_name, trigger=trigger):
+        if isinstance(step, dict) and str(step.get("op") or "") == oid:
+            return True
+    return False
 
 
 def parse_select_option(steps: Sequence[Any]) -> Optional[int]:

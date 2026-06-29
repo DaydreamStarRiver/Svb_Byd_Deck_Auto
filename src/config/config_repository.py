@@ -27,6 +27,7 @@ from src.config.migrations import (
     migrate_strategy_effects_schema,
     migrate_strategy_split_attack_times_buff,
     migrate_strategy_effects_to_ops,
+    prune_invalid_strategy_effect_ops,
 )
 from src.config.paths import get_config_path
 from src.config.persisted_config import prune_config_for_save
@@ -81,6 +82,10 @@ def _normalize_and_migrate(user_config: Dict[str, Any]) -> Dict[str, Any]:
         pass
     try:
         migrate_strategy_split_attack_times_buff(cfg)
+    except Exception:
+        pass
+    try:
+        prune_invalid_strategy_effect_ops(cfg)
     except Exception:
         pass
     try:
