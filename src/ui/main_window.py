@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QPalette, QPixmap
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -46,12 +47,71 @@ from src.ui.workers.log_listener import LogListener
 from src.ui.workers.script_runner import ScriptRunner
 
 
+class DeviceConnectionChecker(QThread):
+    """Background ADB/uiautomator2 connection probe for the connect button."""
+
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, serial: str, parent=None):
+        super().__init__(parent)
+        self.serial = str(serial or "").strip()
+
+    @staticmethod
+    def _is_tcp_serial(serial: str) -> bool:
+        return bool(re.match(r"^[^:\s]+:\d+$", str(serial or "").strip()))
+
+    def run(self) -> None:
+        serial = self.serial
+        if not serial:
+            self.finished_signal.emit(False, "设备序列号为空")
+            return
+
+        try:
+            from adbutils import adb
+
+            connect_msg = ""
+            if self._is_tcp_serial(serial):
+                try:
+                    connect_msg = str(adb.connect(serial, timeout=5) or "")
+                except Exception as e:
+                    connect_msg = f"adb connect failed: {e}"
+
+            devices = []
+            try:
+                devices = [str(getattr(d, "serial", "") or "") for d in adb.device_list()]
+            except Exception:
+                devices = []
+
+            adb_device = adb.device(serial)
+            if adb_device is None:
+                detail = f"ADB未找到设备 {serial}；当前设备: {devices or '无'}"
+                if connect_msg:
+                    detail += f"；connect: {connect_msg}"
+                self.finished_signal.emit(False, detail)
+                return
+
+            import uiautomator2 as u2
+
+            u2_device = u2.connect(serial)
+            if u2_device is None:
+                self.finished_signal.emit(False, f"uiautomator2连接失败: {serial}")
+                return
+
+            detail = f"设备连接成功: {serial}"
+            if connect_msg:
+                detail += f"；connect: {connect_msg}"
+            self.finished_signal.emit(True, detail)
+        except Exception as e:
+            self.finished_signal.emit(False, f"设备连接检测异常: {e}")
+
+
 class ShadowverseUI(QMainWindow):
     def __init__(self, run_main_script, command_queue, log_queue):
         super().__init__()
         self._run_main_script = run_main_script
         self._command_queue = command_queue
         self._log_queue = log_queue
+        self._device_check_thread = None
 
         # 显示启动弹窗，如果用户不同意则退出程序
         if not self.show_startup_dialog():
@@ -653,16 +713,11 @@ class ShadowverseUI(QMainWindow):
         self.script_thread.status_signal.connect(self.update_status)
         self.script_thread.stats_signal.connect(self.update_stats)
 
-        # 连接设备检测
-        if self._check_device_connection(adb_port):
-            self.start_btn.setEnabled(True)
-            self.status_label.setText("已连接")
-            self.status_label.setStyleSheet("color: #55FF55;")
-        else:
-            self.connect_btn.setEnabled(True)
-            self.status_label.setText("连接失败")
-            self.status_label.setStyleSheet("color: #FF5555;")
-            self.append_log(f"设备连接失败: {adb_port}")
+        self.status_label.setText("连接中...")
+        self.status_label.setStyleSheet("color: #FFFF55;")
+        self._device_check_thread = DeviceConnectionChecker(adb_port, self)
+        self._device_check_thread.finished_signal.connect(self._on_device_connection_checked)
+        self._device_check_thread.start()
 
     def _save_device_config_to_file(self, adb_port, is_global, deep_color, gala_mode, auto_pass):
         """保存设备配置到配置文件（供下次启动读取）"""
@@ -736,6 +791,26 @@ class ShadowverseUI(QMainWindow):
         except Exception as e:
             self.append_log(f"设备连接检测异常: {str(e)}")
             return False
+
+    def _on_device_connection_checked(self, ok: bool, message: str) -> None:
+        if ok:
+            self.start_btn.setEnabled(True)
+            self.status_label.setText("已连接")
+            self.status_label.setStyleSheet("color: #55FF55;")
+            self.append_log(message)
+        else:
+            self.connect_btn.setEnabled(True)
+            self.start_btn.setEnabled(False)
+            self.status_label.setText("连接失败")
+            self.status_label.setStyleSheet("color: #FF5555;")
+            self.append_log(message or "设备连接失败")
+
+        try:
+            if self._device_check_thread is not None:
+                self._device_check_thread.deleteLater()
+        except Exception:
+            pass
+        self._device_check_thread = None
 
     def is_script_running(self) -> bool:
         """Return True when automation thread is active."""

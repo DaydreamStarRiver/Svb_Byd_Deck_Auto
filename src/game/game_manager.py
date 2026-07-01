@@ -484,6 +484,24 @@ class GameManager:
             yellow_mask2 = cv2.inRange(hsv_color, lower_yellow2, upper_yellow2)
             yellow1_mask = cv2.bitwise_or(yellow_mask1, yellow_mask2)
             blue_mask = cv2.inRange(hsv_blue, lower_blue, upper_blue)
+
+            def vote_blue_only_follower_type(center_x_full: float):
+                """对即将落为 normal 的 blue-only 随从做局部颜色投票。"""
+                xhalf = 60
+                mask_width = green_mask.shape[1]
+                center_x_in_crop = int(round(center_x_full - OUR_FOLLOWER_REGION[0]))
+                center_x_in_crop = max(0, min(mask_width - 1, center_x_in_crop))
+                x1 = max(0, center_x_in_crop - xhalf)
+                x2 = min(mask_width, center_x_in_crop + xhalf + 1)
+                green_pixels = int(cv2.countNonZero(green_mask[:, x1:x2]))
+                yellow_pixels = int(cv2.countNonZero(yellow1_mask[:, x1:x2]))
+                follower_type = "normal"
+                if green_pixels >= 120 and green_pixels > yellow_pixels * 2:
+                    follower_type = "green"
+                elif yellow_pixels >= 120 and yellow_pixels > green_pixels * 2:
+                    follower_type = "yellow"
+                return follower_type, green_pixels, yellow_pixels, x1, x2
+
             kernel = np.ones((1, 1), np.uint8)
             green_eroded = cv2.erode(
                 cv2.dilate(green_mask, kernel, iterations=1), kernel, iterations=1
@@ -833,10 +851,39 @@ class GameManager:
 
                     # 如果距离所有绿色和黄色中心点都在50像素以外，则认为是普通随从
                     if not is_near_green_or_yellow:
-                        follower_type = "normal"
+                        (
+                            follower_type,
+                            vote_green_pixels,
+                            vote_yellow_pixels,
+                            vote_x1,
+                            vote_x2,
+                        ) = vote_blue_only_follower_type(center_x_full)
                         follower_positions.append(
                             (center_x_full, center_y_full, follower_type)
                         )
+                        if debug_flag:
+                            debug_vote_x1 = vote_x1
+                            debug_vote_x2 = max(vote_x1, vote_x2 - 1)
+                            cv2_any.rectangle(
+                                dbg_color,
+                                (debug_vote_x1, 30),
+                                (debug_vote_x2, dbg_color.shape[0] - 31),
+                                (255, 0, 255),
+                                1,
+                            )
+                            vote_label = (
+                                f"vote {follower_type} G:{vote_green_pixels} "
+                                f"Y:{vote_yellow_pixels}"
+                            )
+                            cv2_any.putText(
+                                dbg_color,
+                                vote_label,
+                                (debug_vote_x1, 25),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.45,
+                                (255, 0, 255),
+                                1,
+                            )
                     if debug_flag:
                         box = cv2.boxPoints(rect)
                         box = box.astype(np.int32)

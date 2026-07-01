@@ -95,13 +95,26 @@ class EffectEngine:
     @staticmethod
     def _execute_one(op_id: str, step: Dict[str, Any], ctx: Any) -> bool:
         if op_id == "select_option":
-            return OperationExecutor.select_option(ctx, index=step.get("index", 1))
+            return OperationExecutor.select_option(
+                ctx,
+                index=step.get("index", 1),
+                option_count=step.get("option_count", 2),
+            )
+        if op_id == "select_hand_card":
+            return OperationExecutor.select_hand_card(
+                ctx,
+                priority_cards=step.get("priority_cards", ""),
+                max_retries=step.get("max_retries", 2),
+            )
+        if op_id == "force_post_play_hand_refresh":
+            return OperationExecutor.force_post_play_hand_refresh(ctx)
         if op_id == "select_option_by_our_followers":
             return OperationExecutor.select_option_by_our_followers(
                 ctx,
                 threshold=step.get("threshold", 3),
                 le_option=step.get("le_option", 1),
                 gt_option=step.get("gt_option", 2),
+                option_count=step.get("option_count", 2),
             )
         if op_id == "select_targets":
             return OperationExecutor.select_targets(

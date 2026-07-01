@@ -32,6 +32,10 @@ class HandCardContext:
     select_targets_fail_kinds: List[str] = field(default_factory=list)
     select_targets_success_kinds: List[str] = field(default_factory=list)
 
+    # Optional pre-action board snapshot (before play/evolve UI may cover board)
+    pre_action_our_followers: Optional[Sequence[Any]] = None
+    pre_action_our_follower_count: Optional[int] = None
+
 
 @dataclass
 class FollowerContext:
@@ -46,6 +50,10 @@ class FollowerContext:
 
     # Optional: reuse already scanned followers to avoid extra CV work
     existing_followers: Optional[Sequence[Any]] = None
+
+    # Optional pre-action board snapshot (before play/evolve UI may cover board)
+    pre_action_our_followers: Optional[Sequence[Any]] = None
+    pre_action_our_follower_count: Optional[int] = None
 
     # For on_attack
     attack_source_pos: Optional[Tuple[int, int]] = None

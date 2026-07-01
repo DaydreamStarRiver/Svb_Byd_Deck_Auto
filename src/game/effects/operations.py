@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import random
+import re
 import time
 from typing import Any, List, Optional, Tuple
 
 from src.config.game_constants import BLANK_CLICK_POSITION, BLANK_CLICK_RANDOM
+from src.config.paths import get_card_cost_dir
+from src.game.sift_card_recognition import SiftCardRecognition
+from src.utils.card_filename import normalize_card_base_name, split_enhance_key
 
 from .target_resolver import resolve_targets
 
@@ -28,22 +32,44 @@ def _get_u2_device(ds: Any) -> Optional[Any]:
         return None
 
 
+def _normalize_card_name_for_match(value: Any) -> str:
+    name = str(value or "").strip()
+    if not name:
+        return ""
+    try:
+        base, _enh = split_enhance_key(name)
+        name = base or name
+    except Exception:
+        pass
+    try:
+        name = normalize_card_base_name(name)
+    except Exception:
+        pass
+    return " ".join(str(name or "").replace("_", " ").split())
+
+
 class OperationExecutor:
     @staticmethod
-    def select_option(ctx: Any, *, index: Any) -> bool:
+    def select_option(ctx: Any, *, index: Any, option_count: Any = 2) -> bool:
         ds = getattr(ctx, "device_state", None)
         if ds is None:
             return False
         idx = _safe_int(index, 0)
-        if idx == 1:
-            x, y = 748, 328
-        elif idx == 2:
-            x, y = 724, 429
-        else:
+        count = _safe_int(option_count, 2)
+        if count not in (2, 3):
+            count = 2
+
+        coords = {
+            2: {1: (748, 328), 2: (724, 429)},
+            3: {1: (768, 254), 2: (768, 361), 3: (768, 467)},
+        }
+        pos = coords.get(count, {}).get(idx)
+        if pos is None:
             return False
+        x, y = pos
 
         try:
-            ds.logger.info(f"[Effect] select_option index={idx}")
+            ds.logger.info(f"[Effect] select_option index={idx} option_count={count}")
         except Exception:
             pass
 
@@ -63,6 +89,7 @@ class OperationExecutor:
         threshold: Any = 3,
         le_option: Any = 1,
         gt_option: Any = 2,
+        option_count: Any = 2,
     ) -> bool:
         ds = getattr(ctx, "device_state", None)
         if ds is None:
@@ -72,29 +99,129 @@ class OperationExecutor:
         le_option_i = _safe_int(le_option, 1)
         gt_option_i = _safe_int(gt_option, 2)
 
-        follower_count = 0
-        try:
-            screenshot = ds.take_screenshot()
-            if screenshot is not None and ds.game_manager is not None:
-                followers = ds.game_manager.scan_our_followers(
-                    screenshot,
-                    extra_shots=0,
-                    with_names=True,
+        pre_count = getattr(ctx, "pre_action_our_follower_count", None)
+        if pre_count is not None:
+            follower_count = _safe_int(pre_count, 0)
+            source = "pre_action"
+        else:
+            try:
+                ds.logger.warning(
+                    "[Effect] select_option_by_our_followers skipped: "
+                    "pre_action_our_follower_count unavailable"
                 )
-                follower_count = len(list(followers or []))
-        except Exception:
-            follower_count = 0
-
+            except Exception:
+                pass
+            return False
         selected_option = le_option_i if follower_count <= threshold_i else gt_option_i
         try:
             ds.logger.info(
                 "[Effect] select_option_by_our_followers "
-                f"count={follower_count} threshold={threshold_i} -> option={selected_option}"
+                f"count={follower_count} source={source} "
+                f"threshold={threshold_i} -> option={selected_option}"
             )
         except Exception:
             pass
 
-        return OperationExecutor.select_option(ctx, index=selected_option)
+        return OperationExecutor.select_option(ctx, index=selected_option, option_count=option_count)
+
+    @staticmethod
+    def select_hand_card(ctx: Any, *, priority_cards: Any, max_retries: Any = 2) -> bool:
+        ds = getattr(ctx, "device_state", None)
+        if ds is None:
+            return False
+
+        priorities = [p.strip() for p in re.split(r"[\n,，、|]+", str(priority_cards or "")) if p.strip()]
+        normalized_priorities = [_normalize_card_name_for_match(p) for p in priorities]
+        if not priorities:
+            try:
+                ds.logger.warning("[Effect] select_hand_card: priority_cards is empty")
+            except Exception:
+                pass
+            return False
+
+        u2_device = _get_u2_device(ds)
+        if u2_device is None:
+            return False
+
+        recognizer = SiftCardRecognition(get_card_cost_dir(ensure=True))
+        retries = max(1, _safe_int(max_retries, 2))
+        hand_area = (250, 120, 1050, 650)
+        cards: List[Any] = []
+
+        for attempt in range(1, retries + 1):
+            try:
+                screenshot = ds.take_screenshot()
+                cards = recognizer.recognize_hand_cards(screenshot, hand_area=hand_area) if screenshot is not None else []
+            except Exception as e:
+                cards = []
+                try:
+                    ds.logger.warning(f"[Effect] select_hand_card recognize failed: {e}")
+                except Exception:
+                    pass
+
+            normalized_cards = [
+                (card, _normalize_card_name_for_match(card.get("name") if isinstance(card, dict) else ""))
+                for card in (cards or [])
+                if isinstance(card, dict)
+            ]
+            for want, want_norm in zip(priorities, normalized_priorities):
+                if not want_norm:
+                    continue
+                for card, card_norm in normalized_cards:
+                    if card_norm == want_norm:
+                        center = card.get("center") or None
+                        if not center or len(center) != 2:
+                            continue
+                        x, y = int(center[0]), int(center[1])
+                        try:
+                            ds.logger.info(f"[Effect] select_hand_card {want}: ({x},{y}) attempt={attempt}")
+                        except Exception:
+                            pass
+                        time.sleep(0.3)
+                        u2_device.click(x, y)
+                        time.sleep(0.5)
+                        return True
+
+            fallback_cards = []
+            for card, _card_norm in normalized_cards:
+                center = card.get("center") or None
+                if center and len(center) == 2:
+                    try:
+                        fallback_cards.append((int(center[0]), int(center[1]), card))
+                    except Exception:
+                        continue
+            if fallback_cards:
+                x, y, card = sorted(fallback_cards, key=lambda it: it[0])[0]
+                try:
+                    name = str(card.get("name") or "")
+                    ds.logger.info(f"[Effect] select_hand_card fallback {name}: ({x},{y}) attempt={attempt}")
+                except Exception:
+                    pass
+                time.sleep(0.3)
+                u2_device.click(x, y)
+                time.sleep(0.5)
+                return True
+
+            if attempt < retries:
+                time.sleep(0.2)
+
+        try:
+            found = [str(c.get("name") or "") for c in (cards or [])]
+            ds.logger.warning(f"[Effect] select_hand_card: no priority match, priorities={priorities}, found={found}")
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def force_post_play_hand_refresh(ctx: Any) -> bool:
+        ds = getattr(ctx, "device_state", None)
+        setattr(ctx, "force_post_play_hand_refresh", True)
+        try:
+            if ds is not None:
+                ds.logger.info("[Effect] force_post_play_hand_refresh")
+        except Exception:
+            pass
+        return True
 
     @staticmethod
     def cancel_action(ctx: Any) -> bool:

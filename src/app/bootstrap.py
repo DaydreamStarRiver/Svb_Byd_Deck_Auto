@@ -7,11 +7,10 @@ stay thin.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import traceback
 import queue
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from src.config.config_manager import ConfigManager
 from src.core.logging_utils import setup_logging
@@ -125,8 +124,7 @@ def run_cli(
             pass
 
         # 设置日志系统（尽早初始化，方便后续步骤输出一致）
-        # 使用进程ID生成唯一日志文件名，避免多实例日志混淆
-        log_file = f"main_log_{os.getpid()}.log"
+        log_file = "main_log.log"
         logger = setup_logging(config_manager.config, log_queue, log_file=log_file)
         logger.info("=== 影之诗自动对战脚本启动 ===")
         logger.info(f"使用配置文件: {config_manager.config_file}")

@@ -136,6 +136,16 @@ OPERATIONS: List[Dict[str, Any]] = [
         "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
         "params_schema": [
             {
+                "name": "option_count",
+                "label": "选项数",
+                "type": "enum",
+                "default": 2,
+                "options": [
+                    {"label": "2项", "value": 2},
+                    {"label": "3项", "value": 3},
+                ],
+            },
+            {
                 "name": "index",
                 "label": "选项",
                 "type": "enum",
@@ -143,9 +153,37 @@ OPERATIONS: List[Dict[str, Any]] = [
                 "options": [
                     {"label": "选项1", "value": 1},
                     {"label": "选项2", "value": 2},
+                    {"label": "选项3", "value": 3},
                 ],
             }
         ],
+    },
+    {
+        "op_id": "select_hand_card",
+        "label": "选择手牌卡牌",
+        "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
+        "params_schema": [
+            {
+                "name": "priority_cards",
+                "label": "优先卡牌",
+                "type": "card_priority_list",
+                "default": "",
+            },
+            {
+                "name": "max_retries",
+                "label": "最大重试",
+                "type": "int",
+                "default": 2,
+                "min": 1,
+                "max": 5,
+            },
+        ],
+    },
+    {
+        "op_id": "force_post_play_hand_refresh",
+        "label": "出牌后刷新手牌",
+        "supported_context_kinds": [CONTEXT_HAND_CARD, CONTEXT_FOLLOWER],
+        "params_schema": [],
     },
     {
         "op_id": "select_targets",
@@ -194,6 +232,16 @@ OPERATIONS: List[Dict[str, Any]] = [
                 "max": 10,
             },
             {
+                "name": "option_count",
+                "label": "选项数",
+                "type": "enum",
+                "default": 2,
+                "options": [
+                    {"label": "2项", "value": 2},
+                    {"label": "3项", "value": 3},
+                ],
+            },
+            {
                 "name": "le_option",
                 "label": "<=阈值选项",
                 "type": "enum",
@@ -201,6 +249,7 @@ OPERATIONS: List[Dict[str, Any]] = [
                 "options": [
                     {"label": "选项1", "value": 1},
                     {"label": "选项2", "value": 2},
+                    {"label": "选项3", "value": 3},
                 ],
             },
             {
@@ -211,6 +260,7 @@ OPERATIONS: List[Dict[str, Any]] = [
                 "options": [
                     {"label": "选项1", "value": 1},
                     {"label": "选项2", "value": 2},
+                    {"label": "选项3", "value": 3},
                 ],
             },
         ],

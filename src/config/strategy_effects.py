@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Sequence
 
+from src.config.effects_registry import get_operation
 from src.utils.card_filename import (
     make_enhance_key,
     normalize_card_base_name,
@@ -414,7 +415,7 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
     """Normalize legacy Step2B steps to Step3A OperationSpec dicts.
 
     Supported legacy keys:
-    - {"select_option": 1/2} -> {"op": "select_option", "index": 1/2}
+    - {"select_option": 1/2/3} -> {"op": "select_option", "index": 1/2/3}
     - {"target_type": "..."} -> canonical ops (select_targets / select_option_by_our_followers)
     - {"action": "..."} -> canonical ops (select_targets)
 
@@ -428,6 +429,8 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
             return 1
         if v in (2, "2", "选项2", "Option2", "option2"):
             return 2
+        if v in (3, "3", "选项3", "Option3", "option3"):
+            return 3
         return None
 
     def _attach_on_error(items: Sequence[Dict[str, Any]], src_step: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -452,33 +455,33 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
 
         op_id = step.get("op")
         if isinstance(op_id, str) and op_id:
-            if op_id == "select_option":
-                idx = _norm_select_option(step.get("index"))
-                if idx is None:
-                    idx = _norm_select_option(step.get("select_option"))
-                if idx is not None:
-                    normalized: Dict[str, Any] = {"op": "select_option", "index": int(idx)}
-                    if step.get("on_error"):
-                        normalized["on_error"] = step.get("on_error")
-                    ops.append(normalized)
-                else:
-                    ops.append(dict(step))
-                continue
             if op_id == "select_targets":
                 target = step.get("target")
                 if isinstance(target, dict) and str(target.get("kind") or "") == "option":
                     params_obj = target.get("params")
-                    idx = (
-                        _norm_select_option(params_obj.get("index"))
-                        if isinstance(params_obj, dict)
-                        else None
-                    )
+                    idx = _norm_select_option(params_obj.get("index")) if isinstance(params_obj, dict) else None
                     if idx is not None:
                         normalized: Dict[str, Any] = {"op": "select_option", "index": int(idx)}
+                        if isinstance(params_obj, dict) and params_obj.get("option_count") is not None:
+                            normalized["option_count"] = _safe_int(params_obj.get("option_count"), 2)
+                        elif step.get("option_count") is not None:
+                            normalized["option_count"] = _safe_int(step.get("option_count"), 2)
                         if step.get("on_error"):
                             normalized["on_error"] = step.get("on_error")
                         ops.append(normalized)
                         continue
+
+            if get_operation(op_id) is not None:
+                if op_id == "select_option":
+                    idx = _norm_select_option(step.get("index"))
+                    if idx is not None and step.get("index") != idx:
+                        normalized = dict(step)
+                        normalized["index"] = int(idx)
+                        ops.append(normalized)
+                        continue
+                ops.append(dict(step))
+                continue
+
             if op_id == "legacy_target_type":
                 ops.extend(_attach_on_error(convert_legacy_target_type_to_ops(step.get("target_type")), step))
                 continue
@@ -502,47 +505,22 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
                 if step.get("on_error"):
                     ops[-1]["on_error"] = step.get("on_error")
                 continue
-            if op_id == "buff":
-                target_mode = str(step.get("target") or "others")
-                atk_delta = step.get("atk_delta", 1)
-                hp_delta = step.get("hp_delta", 1)
-                has_stats = ("atk_delta" in step) or ("hp_delta" in step)
-                if has_stats or ("attack_times" not in step):
-                    buff_step: Dict[str, Any] = {
+            if op_id == "buff_self":
+                amount = step.get("amount", 0)
+                try:
+                    amount_i = int(amount)
+                except Exception:
+                    amount_i = 0
+                ops.append(
+                    {
                         "op": "buff",
-                        "target": target_mode,
-                        "atk_delta": _safe_int(atk_delta, 0),
-                        "hp_delta": _safe_int(hp_delta, 0),
+                        "target": "self",
+                        "atk_delta": int(amount_i),
+                        "hp_delta": int(amount_i),
                     }
-                    if step.get("on_error"):
-                        buff_step["on_error"] = step.get("on_error")
-                    ops.append(buff_step)
-
-                if step.get("attack_times") is not None:
-                    times_step: Dict[str, Any] = {
-                        "op": "buff_attack_times",
-                        "target": target_mode,
-                        "attack_times": max(1, _safe_int(step.get("attack_times"), 1)),
-                    }
-                    if step.get("on_error"):
-                        times_step["on_error"] = step.get("on_error")
-                    ops.append(times_step)
-                continue
-            if op_id == "buff_attack_times":
-                normalized: Dict[str, Any] = {
-                    "op": "buff_attack_times",
-                    "target": str(step.get("target") or "others"),
-                    "attack_times": max(1, _safe_int(step.get("attack_times"), 1)),
-                }
+                )
                 if step.get("on_error"):
-                    normalized["on_error"] = step.get("on_error")
-                ops.append(normalized)
-                continue
-            if op_id == "disallow_empty_evolve":
-                normalized: Dict[str, Any] = {"op": "disallow_empty_evolve"}
-                if step.get("on_error"):
-                    normalized["on_error"] = step.get("on_error")
-                ops.append(normalized)
+                    ops[-1]["on_error"] = step.get("on_error")
                 continue
             ops.append(dict(step))
             continue
@@ -557,6 +535,18 @@ def normalize_effect_steps_to_ops(steps: Sequence[Any]) -> List[Dict[str, Any]]:
 
         if "action" in step:
             ops.extend(_attach_on_error(convert_legacy_action_to_ops(step.get("action")), step))
+
+        target = step.get("target")
+        if isinstance(target, dict) and str(target.get("kind") or "") == "option":
+            params_obj = target.get("params")
+            opt = _norm_select_option(params_obj.get("index")) if isinstance(params_obj, dict) else None
+            if opt is not None:
+                normalized = {"op": "select_option", "index": int(opt)}
+                if isinstance(params_obj, dict) and params_obj.get("option_count") is not None:
+                    normalized["option_count"] = _safe_int(params_obj.get("option_count"), 2)
+                elif step.get("option_count") is not None:
+                    normalized["option_count"] = _safe_int(step.get("option_count"), 2)
+                ops.append(normalized)
 
     return ops
 
@@ -591,7 +581,7 @@ def card_effect_has_op(
 
 
 def parse_select_option(steps: Sequence[Any]) -> Optional[int]:
-    """Return 1/2 if any step requests option selection."""
+    """Return 1/2/3 if any step requests option selection."""
 
     for step in steps:
         if not isinstance(step, dict) or "select_option" not in step:
@@ -606,6 +596,8 @@ def parse_select_option(steps: Sequence[Any]) -> Optional[int]:
             return 1
         if v in (2, "2", "选项2", "Option2", "option2"):
             return 2
+        if v in (3, "3", "选项3", "Option3", "option3"):
+            return 3
     return None
 
 

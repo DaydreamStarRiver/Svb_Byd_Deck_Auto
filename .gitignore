@@ -52,6 +52,7 @@ round_stats_*.json
 
 # 调试文件
 debug/
+/dev_*/
 
 # 图片文件（但允许模板文件夹中的图片）
 *.png
@@ -117,6 +118,9 @@ config.json
 claude.md
 /debug*
 #/quanka
+
+# OpenCode deepwork session notes
+.slim/deepwork/
 
 # 免责声明
 consent.txt

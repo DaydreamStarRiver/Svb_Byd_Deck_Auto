@@ -224,8 +224,8 @@ class DeviceState:
         if logger.handlers:
             return logger
 
-        # 创建文件日志处理器（使用进程ID确保多实例不会互相覆盖）
-        log_file = f"script_log_{os.getpid()}_{self.serial.replace(':', '_')}.log"
+        # 创建文件日志处理器（按设备区分；同一设备复用同一个日志文件）
+        log_file = f"script_log_{self.serial.replace(':', '_')}.log"
         file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         file_handler.setFormatter(file_formatter)

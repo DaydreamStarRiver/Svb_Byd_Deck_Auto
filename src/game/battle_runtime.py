@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from src.game.domain import FollowerRuntimeState
@@ -52,7 +53,7 @@ class BattleRuntimeState:
             ward_positions=None,
         )
         self._drop_dead(self.ours)
-        return list(self.ours)
+        return [st for st in list(self.ours) if int(getattr(st, "miss_count", 0) or 0) <= 0]
 
     def sync_enemy(
         self,
@@ -98,11 +99,39 @@ class BattleRuntimeState:
         if mode not in ("none", "normal", "super"):
             mode = "none"
         state.evolved_type = mode
+        cur_type = str(getattr(state, "follower_type", "normal") or "normal")
+        if cur_type == "normal":
+            state.follower_type = "yellow"
+        elif cur_type in ("green", "yellow"):
+            state.follower_type = cur_type
         self._debug(
             "mark_evolution "
             f"uid={int(getattr(state, 'uid', 0) or 0)} "
             f"mode={mode} x={int(getattr(state, 'x', 0) or 0)} "
             f"name={str(getattr(state, 'raw_name', '') or getattr(state, 'base_name', '') or '')}"
+        )
+        return True
+
+    def mark_our_attack_spent(
+        self,
+        follower_pos: Optional[Sequence[Any]] = None,
+        follower_uid: Any = None,
+        fallback_name: str = "",
+    ) -> bool:
+        state = None
+        if follower_uid is not None:
+            state = self._find_ours_by_uid(follower_uid)
+        if state is None and follower_pos is not None:
+            state = self._find_ours_for_action(follower_pos, fallback_name=str(fallback_name or ""))
+        if state is None:
+            return False
+        setattr(state, "_attack_spent_pending", 1)
+        setattr(state, "_attack_spent_ts", time.time())
+        setattr(state, "_attack_spent_name", str(fallback_name or getattr(state, "raw_name", "") or getattr(state, "base_name", "") or ""))
+        self._debug(
+            "mark_attack_spent "
+            f"uid={int(getattr(state, 'uid', 0) or 0)} x={int(getattr(state, 'x', 0) or 0)} "
+            f"name={str(getattr(state, '_attack_spent_name', '') or '')}"
         )
         return True
 
@@ -135,9 +164,9 @@ class BattleRuntimeState:
                 return True
             return False
 
-        candidates = [st for st in list(self.ours or []) if _is_match(st)]
+        candidates = [st for st in self._active_ours() if _is_match(st)]
         if not candidates:
-            candidates = list(self.ours or [])
+            candidates = self._active_ours()
         if not candidates:
             return None
 
@@ -219,7 +248,7 @@ class BattleRuntimeState:
 
         exact = [
             st
-            for st in list(self.ours or [])
+            for st in self._active_ours()
             if str(getattr(st, "source_cfg_key", "") or "") == key
         ]
         if exact:
@@ -231,7 +260,7 @@ class BattleRuntimeState:
 
         by_base = [
             st
-            for st in list(self.ours or [])
+            for st in self._active_ours()
             if normalize_card_base_name(str(getattr(st, "base_name", "") or "")) == expected_base
         ]
         if not by_base:
@@ -264,7 +293,7 @@ class BattleRuntimeState:
             source = self._find_state(self.ours, source_pos)
         changed = 0
 
-        for st in self.ours:
+        for st in self._active_ours():
             is_source = source is not None and st is source
 
             if mode == "self":
@@ -301,7 +330,7 @@ class BattleRuntimeState:
             source = self._find_state(self.ours, source_pos)
         changed = 0
 
-        for st in self.ours:
+        for st in self._active_ours():
             is_source = source is not None and st is source
 
             if mode == "self":
@@ -652,7 +681,40 @@ class BattleRuntimeState:
         st.side = side
         st.x = int(x)
         st.y = int(y)
-        st.follower_type = ftype
+        old_type = str(getattr(st, "follower_type", "normal") or "normal")
+        if side == "ours" and ftype == "normal" and old_type in ("green", "yellow"):
+            pending = int(getattr(st, "_attack_spent_pending", 0) or 0)
+            pending_ts = float(getattr(st, "_attack_spent_ts", 0.0) or 0.0)
+            pending_fresh = bool(pending > 0 and pending_ts > 0.0 and (time.time() - pending_ts) <= 3.0)
+            if pending_fresh:
+                st.follower_type = "normal"
+                try:
+                    delattr(st, "_attack_spent_pending")
+                except Exception:
+                    setattr(st, "_attack_spent_pending", 0)
+                try:
+                    delattr(st, "_attack_spent_ts")
+                except Exception:
+                    setattr(st, "_attack_spent_ts", 0.0)
+                self._debug(
+                    f"accept normal after attack uid={int(getattr(st, 'uid', 0) or 0)} old={old_type}"
+                )
+            else:
+                if pending > 0:
+                    try:
+                        delattr(st, "_attack_spent_pending")
+                    except Exception:
+                        setattr(st, "_attack_spent_pending", 0)
+                    try:
+                        delattr(st, "_attack_spent_ts")
+                    except Exception:
+                        setattr(st, "_attack_spent_ts", 0.0)
+                st.follower_type = old_type
+                self._debug(
+                    f"keep {old_type} over raw normal uid={int(getattr(st, 'uid', 0) or 0)}"
+                )
+        else:
+            st.follower_type = ftype
 
         if side == "enemy":
             st.is_ward = any(abs(int(x) - _safe_int(w[0], 0)) < 50 for w in wards if len(w) >= 1)
@@ -821,9 +883,14 @@ class BattleRuntimeState:
         if uid_i <= 0:
             return None
         for st in list(self.ours or []):
+            if int(getattr(st, "miss_count", 0) or 0) > 0:
+                continue
             if _safe_int(getattr(st, "uid", 0), 0) == uid_i:
                 return st
         return None
+
+    def _active_ours(self) -> List[FollowerRuntimeState]:
+        return [st for st in list(self.ours or []) if int(getattr(st, "miss_count", 0) or 0) <= 0]
 
     def _find_state(
         self,
@@ -843,6 +910,8 @@ class BattleRuntimeState:
         best: Optional[FollowerRuntimeState] = None
         best_score = 10**9
         for st in list(states or []):
+            if str(getattr(st, "side", "") or "") == "ours" and int(getattr(st, "miss_count", 0) or 0) > 0:
+                continue
             dx = abs(int(st.x) - int(x))
             dy = abs(int(st.y) - int(y))
             if dx > int(x_limit) or dy > int(y_limit):
@@ -894,6 +963,7 @@ class BattleRuntimeState:
                 s
                 for s in list(self.ours or [])
                 if str(getattr(s, "source_cfg_key", "") or "") == key
+                and int(getattr(s, "miss_count", 0) or 0) <= 0
             ]
             if exact:
                 try:

@@ -22,7 +22,10 @@ class PlayPhase:
             return False
 
         ok = self.actions._play_cards(image)
-        ds.sleep(0.5)
+        # Let post-play summon/effect/buff board animations settle before the
+        # next phase performs evolve/attack scans.  The blank-panel click below
+        # sleeps another 0.5s, so this makes the total post-play settle 2.0s.
+        ds.sleep(1.5)
 
         # 点击空白处关闭面板
         self.actions._click_blank_panel(sleep_seconds=0.5)

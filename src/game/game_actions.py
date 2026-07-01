@@ -51,6 +51,9 @@ class GameActions:
 
         # Keep a small observation cache for logging.
         self._last_observed_hand_cards = []
+        self._force_post_play_hand_refresh = False
+        self._force_post_evolve_hand_refresh = False
+        self._last_play_phase_remaining_cost = 0
 
         # Policy hook (default preserves legacy behavior).
         try:
@@ -71,6 +74,7 @@ class GameActions:
         self._spot_state: Dict[int, Dict[str, Any]] = {}
         self._spot_round_key: Optional[Tuple[int, int]] = None
         self._spot_centers: List[int] = self._build_spot_centers()
+        self._recent_attack_slots: Dict[int, Dict[str, Any]] = {}
 
         self.battle_runtime = None
         self._runtime_epoch = None
@@ -160,19 +164,34 @@ class GameActions:
             return
         if key != prev:
             self._spot_state.clear()
+            self._recent_attack_slots.clear()
             self._spot_round_key = key
 
     def _mark_recent_attack_slot(self, pos: Sequence[Any]) -> None:
-        """Compatibility hook after a successful attack.
-
-        Attack consumption is tracked by attacker identity (uid/key + used/cap).
-        Do not apply slot-level force-normal here, which can leak across followers
-        after board compression/shift.
-        """
+        """Short-lived slot evidence after an attack was actually consumed."""
 
         if not isinstance(pos, (list, tuple)) or len(pos) < 1:
             return
         self._sync_spot_round()
+        try:
+            x_i = int(pos[0])
+        except Exception:
+            return
+        slot = int(self._slot_id_for_x(x_i))
+        self._recent_attack_slots[slot] = {"x": int(x_i), "ts": time.time(), "round": self._current_round_key()}
+
+    def _consume_recent_attack_slot(self, slot: int, x_i: int) -> bool:
+        ev = self._recent_attack_slots.get(int(slot))
+        if not ev:
+            return False
+        now = time.time()
+        if ev.get("round") != self._current_round_key() or now - float(ev.get("ts", 0) or 0) > 3.0:
+            self._recent_attack_slots.pop(int(slot), None)
+            return False
+        if abs(int(ev.get("x", x_i) or x_i) - int(x_i)) > 90:
+            return False
+        self._recent_attack_slots.pop(int(slot), None)
+        return True
 
     def _aggregate_followers_from_shots(
         self,
@@ -376,9 +395,8 @@ class GameActions:
         """Stabilize follower type/name by board slot history.
 
         Rules:
-        - normal can downgrade yellow only after 2 consecutive normal hits.
-        - normal cannot downgrade green (scan-only protection).
-        - empty name never overwrites existing slot name.
+        - raw normal can downgrade green/yellow only with short-lived attack evidence.
+        - empty name does not overwrite a continuous slot name.
         """
 
         now = time.time()
@@ -433,10 +451,8 @@ class GameActions:
             if in_type == "normal":
                 if spot_continuous:
                     normal_streak = prev_streak + 1
-                    if prev_type == "green":
-                        eff_type = "normal" if normal_streak >= 2 else "green"
-                    elif prev_type == "yellow":
-                        eff_type = "normal" if normal_streak >= 2 else "yellow"
+                    if prev_type in ("green", "yellow"):
+                        eff_type = "normal" if self._consume_recent_attack_slot(slot, x_i) else prev_type
                     else:
                         eff_type = "normal"
                 else:
@@ -448,7 +464,7 @@ class GameActions:
 
             if isinstance(in_name, str) and in_name:
                 eff_name = in_name
-            elif spot_continuous and str(eff_type) in ("green", "yellow") and prev_name_s:
+            elif spot_continuous and prev_name_s:
                 eff_name = prev_name_s
             else:
                 eff_name = None
@@ -620,8 +636,8 @@ class GameActions:
         if runtime is None or not hasattr(runtime, "mark_latest_play_origin"):
             return
         try:
-            # Wait for summon animation to settle before tagging follower origin.
-            self.device_state.sleep(1.0)
+            # Wait for summon/effect animation to settle before tagging follower origin.
+            self.device_state.sleep(2.0)
             followers = self._refresh_our_followers(
                 sort_desc=True,
                 extra_shots=0,
@@ -778,6 +794,9 @@ class GameActions:
                 cfg_key=str(effect_key or ""),
                 follower_pos=pos_xy,
                 follower_uid=source_uid,
+                existing_followers=list(all_followers or []),
+                pre_action_our_followers=list(all_followers or []),
+                pre_action_our_follower_count=len(list(all_followers or [])),
                 attack_source_pos=pos_xy,
             )
             _EffectEngine.run_ops(ops, ctx=ctx, trigger_id="on_attack")
@@ -1535,6 +1554,12 @@ class GameActions:
                     name_hint=selected_follower_name,
                 )
                 if remain_cnt <= 0:
+                    try:
+                        runtime = getattr(self, "battle_runtime", None)
+                        if runtime is not None and hasattr(runtime, "mark_our_attack_spent"):
+                            runtime.mark_our_attack_spent(selected_follower, fallback_name=str(selected_follower_name or ""))
+                    except Exception:
+                        pass
                     self._mark_recent_attack_slot(selected_follower)
                 current_followers = _local_consume_attacker_slot(
                     current_followers,
@@ -1676,6 +1701,12 @@ class GameActions:
                     name_hint=name,
                 )
                 if remain_cnt <= 0:
+                    try:
+                        runtime = getattr(self, "battle_runtime", None)
+                        if runtime is not None and hasattr(runtime, "mark_our_attack_spent"):
+                            runtime.mark_our_attack_spent((x, y), fallback_name=str(name or ""))
+                    except Exception:
+                        pass
                     self._mark_recent_attack_slot((x, y))
                 current_followers = _local_consume_attacker_slot(
                     current_followers,
@@ -1784,6 +1815,12 @@ class GameActions:
                     name_hint=selected_follower_name,
                 )
                 if remain_cnt <= 0:
+                    try:
+                        runtime = getattr(self, "battle_runtime", None)
+                        if runtime is not None and hasattr(runtime, "mark_our_attack_spent"):
+                            runtime.mark_our_attack_spent(selected_follower, fallback_name=str(selected_follower_name or ""))
+                    except Exception:
+                        pass
                     self._mark_recent_attack_slot(selected_follower)
                 current_followers = _local_consume_attacker_slot(
                     current_followers,
@@ -2045,6 +2082,21 @@ class GameActions:
             enemy_y,
             duration=random.uniform(*settings.get_human_like_drag_duration_range()),
         )
+        runtime = getattr(self, "battle_runtime", None)
+        if runtime is not None and hasattr(runtime, "mark_our_attack_spent"):
+            try:
+                uid = self._runtime_uid_for_ours(pos, fallback_name=str(follower_name or ""))
+                runtime.mark_our_attack_spent(
+                    pos,
+                    follower_uid=uid,
+                    fallback_name=str(follower_name or ""),
+                )
+            except Exception:
+                pass
+        try:
+            self._mark_recent_attack_slot(pos)
+        except Exception:
+            pass
         self.device_state.sleep(1)
         if follower_name:
             self.device_state.logger.info(f"超进化了[{follower_name}]并攻击了敌方较高血量随从")
@@ -2264,14 +2316,19 @@ class GameActions:
         existing_followers: 已扫描的随从结果，避免重复扫描
         """
         from .evolution_special_actions import EvolutionSpecialActions
+        self._force_post_evolve_hand_refresh = False
         evolution_actions = EvolutionSpecialActions(self.device_state)
-        return bool(evolution_actions.handle_evolve_special_action(
+        result = bool(evolution_actions.handle_evolve_special_action(
             follower_name,
             pos,
             is_super_evolution,
             existing_followers,
             follower_uid=follower_uid,
         ))
+        self._force_post_evolve_hand_refresh = bool(
+            result and getattr(evolution_actions, "_force_post_evolve_hand_refresh", False)
+        )
+        return result
 
     def _show_cards_once(self):
         """点击一次展牌按钮（不包含额外 sleep，调用方保持原顺序控制时序）。"""
@@ -2402,8 +2459,21 @@ class GameActions:
                 self._cached_enemy_presence_for_evolve = bool(enemy_check)
 
         policy = self.battle_policy or LegacyBattlePolicy()
+        self._force_post_evolve_hand_refresh = False
         EvolvePhase(self, policy).run()
         self._cached_enemy_presence_for_evolve = None
+
+        if bool(getattr(self, "_force_post_evolve_hand_refresh", False)):
+            self._force_post_evolve_hand_refresh = False
+            self._continue_play_after_evolve_refresh()
+            if getattr(self, "_banlist_blocked_this_round", False):
+                return
+            try:
+                screen = self.device_state.take_screenshot()
+                if screen is not None:
+                    enemy_check = bool(self._scan_enemy_ATK(screen))
+            except Exception:
+                pass
 
         # Give summon / evolution animations time to settle before attack scanning.
         self.device_state.sleep(0.5)
@@ -2511,15 +2581,44 @@ class GameActions:
             return False
         return True
 
-    def _play_cards_with_retry(self, available_cost: int, current_round: int) -> None:
+    def _continue_play_after_evolve_refresh(self) -> None:
+        """进化效果刷新手牌后，用出牌阶段剩余费用继续出牌。"""
+        remaining_cost = int(getattr(self, "_last_play_phase_remaining_cost", 0) or 0)
+        if remaining_cost <= 0:
+            self.device_state.logger.info("进化后刷新手牌：无剩余费用，跳过补出牌")
+            return
+
+        self.device_state.logger.info(f"进化后刷新手牌，使用剩余{remaining_cost}费继续出牌")
+        self._show_cards_once()
+        self.device_state.sleep(2.0)
+        self._play_cards_with_retry(
+            remaining_cost,
+            int(getattr(self.device_state, "current_round_count", 0) or 0),
+            reset_round_state=False,
+            accumulate_cost_history=True,
+        )
+        self._click_blank_panel(sleep_seconds=0.5)
+
+    def _play_cards_with_retry(
+        self,
+        available_cost: int,
+        current_round: int,
+        *,
+        reset_round_state: bool = True,
+        accumulate_cost_history: bool = False,
+    ) -> int:
         """出牌顺序：优先卡（特殊牌+高优先级牌，组内按优先级和费用从高到低）先出，然后普通牌按费用从高到低出。每次出牌都重新识别手牌。"""
         max_retry_attempts = 2  # 最多重试次数
         total_cost_used = 0
         retry_count = 0
-        # Reset observation cache per round.
-        self._last_observed_hand_cards = []
-        # 当前回合需要忽略的卡牌（如剑士的斩击在没有敌方随从时）
-        self._current_round_ignored_cards = set()
+        self._last_play_phase_remaining_cost = int(available_cost or 0)
+        if reset_round_state:
+            # Reset observation cache per round.
+            self._last_observed_hand_cards = []
+            # 当前回合需要忽略的卡牌（如剑士的斩击在没有敌方随从时）
+            self._current_round_ignored_cards = set()
+        elif not hasattr(self, '_current_round_ignored_cards'):
+            self._current_round_ignored_cards = set()
         # 同名牌连续出牌计数器
         card_attempt_count: Dict[str, int] = {}
         self.device_state.logger.info(f"当前回合：{current_round}，可用费用: {available_cost}")
@@ -2529,7 +2628,7 @@ class GameActions:
         cards = hand_manager.get_hand_cards_with_retry(max_retries=3)
         if not cards:
             self.device_state.logger.warning("未能识别到任何手牌")
-            return
+            return int(available_cost or 0)
 
         # Banlist guard (anti-abuse / emergency stop).
         try:
@@ -2542,7 +2641,7 @@ class GameActions:
             hits_str = " | ".join(hits) if hits else "<unknown>"
             self.device_state.logger.warning(f"[Banlist] 命中禁卡表，跳过本回合出牌: {hits_str}")
             self._banlist_blocked_this_round = True
-            return
+            return int(available_cost or 0)
 
         # Cache last observed hand for later structured logging.
         self._last_observed_hand_cards = list(cards)
@@ -2689,25 +2788,32 @@ class GameActions:
             planned_cards_local: List[Dict[str, Any]],
             remain_cost_local: int,
             retry_count_local: int,
+            force_refresh: bool = False,
         ) -> Tuple[List[Dict[str, Any]], int, bool, bool]:
             if not (
-                planned_cards_local
-                and (
-                    int(remain_cost_local or 0) > 0
-                    or any(
-                        int(c.get('_eff_cost', c.get('cost', 0) or 0) or 0) == 0
-                        for c in planned_cards_local
+                bool(force_refresh)
+                or (
+                    planned_cards_local
+                    and (
+                        int(remain_cost_local or 0) > 0
+                        or any(
+                            int(c.get('_eff_cost', c.get('cost', 0) or 0) or 0) == 0
+                            for c in planned_cards_local
+                        )
                     )
                 )
             ):
                 return planned_cards_local, retry_count_local, False, False
 
-            time.sleep(0.60)
+            time.sleep(0.5)
             self._require_u2_device().click(
                 SHOW_CARDS_BUTTON[0] + random.randint(-2, 2),
                 SHOW_CARDS_BUTTON[1] + random.randint(-2, 2),
             )
             time.sleep(1.0)
+            if force_refresh:
+                self.device_state.logger.info("[Effect] force post-play hand refresh")
+                time.sleep(2.0)
 
             new_cards_local: List[Dict[str, Any]] = hand_manager.get_hand_cards_with_retry(
                 max_retries=2,
@@ -2767,7 +2873,10 @@ class GameActions:
                 )
             else:
                 self.device_state.logger.info(f"打出卡牌: {name} (费用: {cost})")
+            self._force_post_play_hand_refresh = False
             result = self._play_single_card(card_to_play)
+            force_refresh = bool(getattr(self, '_force_post_play_hand_refresh', False)) if result else False
+            self._force_post_play_hand_refresh = False
             
             # 处理额外的费用奖励
             extra_cost_bonus = getattr(self, '_current_extra_cost_bonus', 0)
@@ -2827,6 +2936,7 @@ class GameActions:
                 planned_cards,
                 remain_cost,
                 retry_count,
+                force_refresh=force_refresh,
             )
             if should_break:
                 break
@@ -2835,14 +2945,22 @@ class GameActions:
 
         if not hasattr(self.device_state, 'cost_history'):
             self.device_state.cost_history = []
-        self.device_state.cost_history.append(total_cost_used)
+        if accumulate_cost_history and self.device_state.cost_history:
+            self.device_state.cost_history[-1] += total_cost_used
+        else:
+            self.device_state.cost_history.append(total_cost_used)
+        self._last_play_phase_remaining_cost = int(remain_cost or 0)
         self.device_state.logger.info(f"本回合出牌完成，消耗{total_cost_used}费 (可用费用: {available_cost})")
+        return int(remain_cost or 0)
 
     def _play_single_card(self, card):
         """打出单张牌"""
         from .card_play_special_actions import CardPlaySpecialActions
         card_play_actions = CardPlaySpecialActions(self.device_state)
         result = card_play_actions.play_single_card(card)
+        self._force_post_play_hand_refresh = bool(
+            result and getattr(card_play_actions, "_force_post_play_hand_refresh", False)
+        )
 
         try:
             if result:

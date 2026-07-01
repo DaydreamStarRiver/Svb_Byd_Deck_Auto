@@ -6,6 +6,7 @@ Naming convention (stem without extension):
 - "4_xxx" -> base_cost=4, enhance_costs=[], name="xxx"
 - "4@6_xxx" -> base_cost=4, enhance_costs=[6], name="xxx"
 - "4@6@8_xxx" -> base_cost=4, enhance_costs=[6, 8], name="xxx"
+- Legacy "4_6_xxx" / "4_6_8_xxx" is also accepted.
 
 Card names may contain underscores. Enhance tiers are parsed as @-separated
 integer segments immediately after the base cost.
@@ -235,8 +236,22 @@ def parse_card_stem(stem: str) -> Tuple[int, List[int], str]:
         except Exception:
             break
 
-    # The rest are name parts
-    name_parts = parts[1:]
+    # The rest are name parts. Also accept the legacy underscore format:
+    # "4_6_name" / "4_6_8_name". To avoid misreading numeric card IDs like
+    # "4_10001110" as enhance tiers, only consume underscore enhance segments
+    # while at least one following segment remains as the card name.
+    name_start = 1
+    if len(cost_segments) == 1:
+        for idx in range(1, len(parts) - 1):
+            seg = parts[idx]
+            try:
+                enhance_raw.append(int(seg))
+                name_start = idx + 1
+                continue
+            except Exception:
+                break
+
+    name_parts = parts[name_start:]
 
     card_name = "_".join([p for p in name_parts if p is not None])
     if not card_name:

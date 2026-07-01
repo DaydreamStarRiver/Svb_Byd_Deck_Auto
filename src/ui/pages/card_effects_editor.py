@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -48,6 +49,7 @@ from src.config.strategy_effects import (
     convert_legacy_target_type_to_ops,
     get_card_effect_steps,
 )
+from src.utils.card_filename import normalize_card_base_name, split_enhance_key
 
 
 # PyQt5 stubs vary across environments; keep Qt attribute access flexible.
@@ -258,6 +260,32 @@ def _build_param_widget(param_spec: Dict[str, Any]) -> Optional[QWidget]:
         lay.addWidget(le)
         return w
 
+    if ptype == "multiline_str":
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        if label:
+            lay.addWidget(QLabel(f"{label}:"))
+        edit = QPlainTextEdit()
+        edit.setPlainText(str(param_spec.get("default", "") or ""))
+        choices = [str(x).strip() for x in (param_spec.get("choices") or []) if str(x).strip()]
+        hint = str(param_spec.get("hint") or "")
+        if choices:
+            edit.setPlaceholderText(hint or "每行一个卡名，越靠前优先级越高；可自行删除/调整顺序。")
+            btn = QPushButton("填入卡组卡名")
+            btn.clicked.connect(lambda _=False, e=edit, names=choices: e.setPlainText("\n".join(names)))
+            lay.addWidget(btn)
+        elif hint:
+            edit.setPlaceholderText(hint)
+        edit.setFixedHeight(80)
+        lay.addWidget(edit)
+        return w
+
+    if ptype == "card_priority_list":
+        choices = [str(x).strip() for x in (param_spec.get("choices") or []) if str(x).strip()]
+        hint = str(param_spec.get("hint") or "")
+        return CardPriorityListEditor(choices=choices, hint=hint)
+
     if ptype == "enum":
         w = QWidget()
         lay = QHBoxLayout(w)
@@ -289,6 +317,124 @@ def _find_inner_widget(container: QWidget, widget_type: Any) -> Optional[Any]:
         return None
 
 
+class CardPriorityListEditor(QWidget):
+    def __init__(self, *, choices: List[str], hint: str = "", parent=None):
+        super().__init__(parent)
+        self.choices = [str(x).strip() for x in (choices or []) if str(x).strip()]
+        self.choice_by_norm: Dict[str, str] = {}
+        for name in self.choices:
+            norm = self._normalize_name(name)
+            if norm and norm not in self.choice_by_norm:
+                self.choice_by_norm[norm] = name
+        self.items: List[str] = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        top = QHBoxLayout()
+        self.combo = QComboBox()
+        for name in self.choices:
+            self.combo.addItem(name, name)
+        self.combo.setEnabled(bool(self.choices))
+        top.addWidget(self.combo)
+        self.add_btn = QPushButton("添加")
+        self.add_btn.setEnabled(bool(self.choices))
+        self.add_btn.clicked.connect(self._add_current)
+        top.addWidget(self.add_btn)
+        layout.addLayout(top)
+
+        self.hint_label = QLabel(hint or "越上方优先级越高；同一卡名只能添加一次。")
+        self.hint_label.setStyleSheet("color: #6B7280;")
+        layout.addWidget(self.hint_label)
+
+        self.rows_container = QWidget()
+        self.rows_layout = QVBoxLayout(self.rows_container)
+        self.rows_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.rows_container)
+
+        if not self.choices:
+            self.hint_label.setText("当前卡组没有可选卡名，无法添加。")
+
+    @staticmethod
+    def _normalize_name(name: Any) -> str:
+        raw = str(name or "").strip()
+        if not raw:
+            return ""
+        try:
+            base, _cost = split_enhance_key(raw)
+            raw = str(base or raw)
+        except Exception:
+            pass
+        try:
+            raw = normalize_card_base_name(raw) or raw
+        except Exception:
+            pass
+        return raw.replace(" ", "").replace("　", "").replace("_", "").lower()
+
+    def _add_current(self) -> None:
+        name = str(self.combo.currentData() or self.combo.currentText() or "").strip()
+        if name and name in self.choices and name not in self.items:
+            self.items.append(name)
+            self._rebuild_rows()
+
+    def _move(self, index: int, delta: int) -> None:
+        new_index = index + delta
+        if new_index < 0 or new_index >= len(self.items):
+            return
+        self.items[index], self.items[new_index] = self.items[new_index], self.items[index]
+        self._rebuild_rows()
+
+    def _delete(self, index: int) -> None:
+        if 0 <= index < len(self.items):
+            del self.items[index]
+            self._rebuild_rows()
+
+    def _rebuild_rows(self) -> None:
+        while self.rows_layout.count():
+            item = self.rows_layout.takeAt(0)
+            w = item.widget() if item is not None else None
+            if w is not None:
+                w.deleteLater()
+
+        for i, name in enumerate(self.items):
+            row = QWidget()
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.addWidget(QLabel(name))
+            lay.addStretch()
+            up = QPushButton("↑")
+            up.setMaximumWidth(30)
+            up.setEnabled(i > 0)
+            up.clicked.connect(lambda _=False, idx=i: self._move(idx, -1))
+            lay.addWidget(up)
+            down = QPushButton("↓")
+            down.setMaximumWidth(30)
+            down.setEnabled(i < len(self.items) - 1)
+            down.clicked.connect(lambda _=False, idx=i: self._move(idx, 1))
+            lay.addWidget(down)
+            delete = QPushButton("删除")
+            delete.setMaximumWidth(60)
+            delete.clicked.connect(lambda _=False, idx=i: self._delete(idx))
+            lay.addWidget(delete)
+            self.rows_layout.addWidget(row)
+        self.rows_layout.addStretch()
+
+    def set_value(self, value: Any) -> None:
+        raw = str(value or "")
+        wanted = [x.strip() for x in raw.replace("，", "\n").replace("、", "\n").replace("|", "\n").replace(",", "\n").splitlines() if x.strip()]
+        seen = set()
+        self.items = []
+        for name in wanted:
+            standard_name = self.choice_by_norm.get(self._normalize_name(name))
+            if standard_name and standard_name not in seen:
+                seen.add(standard_name)
+                self.items.append(standard_name)
+        self._rebuild_rows()
+
+    def value(self) -> str:
+        return "\n".join(self.items)
+
+
 def _set_param_widget_value(param_spec: Dict[str, Any], widget: QWidget, value: Any) -> None:
     ptype = str(param_spec.get("type") or "")
     if ptype == "bool" and isinstance(widget, QCheckBox):
@@ -309,6 +455,14 @@ def _set_param_widget_value(param_spec: Dict[str, Any], widget: QWidget, value: 
         le = _find_inner_widget(widget, QLineEdit)
         if le is not None:
             le.setText(str(value or ""))
+        return
+    if ptype == "multiline_str":
+        edit = _find_inner_widget(widget, QPlainTextEdit)
+        if edit is not None:
+            edit.setPlainText(str(value or ""))
+        return
+    if ptype == "card_priority_list" and isinstance(widget, CardPriorityListEditor):
+        widget.set_value(value)
         return
     if ptype == "enum":
         combo = _find_inner_widget(widget, QComboBox)
@@ -338,6 +492,11 @@ def _get_param_widget_value(param_spec: Dict[str, Any], widget: QWidget) -> Any:
     if ptype == "str":
         le = _find_inner_widget(widget, QLineEdit)
         return str(le.text()) if le is not None else ""
+    if ptype == "multiline_str":
+        edit = _find_inner_widget(widget, QPlainTextEdit)
+        return str(edit.toPlainText()) if edit is not None else ""
+    if ptype == "card_priority_list" and isinstance(widget, CardPriorityListEditor):
+        return widget.value()
     if ptype == "enum":
         combo = _find_inner_widget(widget, QComboBox)
         return combo.currentData() if combo is not None else None
@@ -355,6 +514,7 @@ class StepRow(QWidget):
         on_move_up,
         on_move_down,
         on_delete,
+        deck_card_names: Optional[List[str]] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -362,6 +522,7 @@ class StepRow(QWidget):
         self._on_move_up = on_move_up
         self._on_move_down = on_move_down
         self._on_delete = on_delete
+        self.deck_card_names = list(deck_card_names or [])
 
         self._param_widgets: Dict[str, Any] = {}
 
@@ -437,18 +598,22 @@ class StepRow(QWidget):
         for p in params_schema:
             if not isinstance(p, dict):
                 continue
-            w = _build_param_widget(p)
+            spec = dict(p)
+            if op_id == "select_hand_card" and str(spec.get("name") or "") == "priority_cards":
+                spec["choices"] = self.deck_card_names
+                spec["hint"] = "从当前卡组卡名中添加；越上方优先级越高。"
+            w = _build_param_widget(spec)
             if w is None:
                 continue
-            name = str(p.get("name") or "")
+            name = str(spec.get("name") or "")
             if name:
-                self._param_widgets[name] = (p, w)
+                self._param_widgets[name] = (spec, w)
 
             # Load default / current
             if name in self.op_spec:
-                _set_param_widget_value(p, w, self.op_spec.get(name))
-            elif "default" in p:
-                _set_param_widget_value(p, w, p.get("default"))
+                _set_param_widget_value(spec, w, self.op_spec.get(name))
+            elif "default" in spec:
+                _set_param_widget_value(spec, w, spec.get("default"))
             self.params_layout.addWidget(w)
 
         self.params_layout.addStretch()
@@ -487,10 +652,11 @@ class RawStepRow(QWidget):
 
 
 class TriggerEditor(QWidget):
-    def __init__(self, *, trigger_id: str, context_kind: str, parent=None):
+    def __init__(self, *, trigger_id: str, context_kind: str, deck_card_names: Optional[List[str]] = None, parent=None):
         super().__init__(parent)
         self.trigger_id = str(trigger_id or "")
         self.context_kind = str(context_kind or "")
+        self.deck_card_names = list(deck_card_names or [])
         self.rows: List[QWidget] = []
 
         layout = QVBoxLayout(self)
@@ -561,6 +727,7 @@ class TriggerEditor(QWidget):
             on_move_up=lambda r: self._move_row(r, -1),
             on_move_down=lambda r: self._move_row(r, 1),
             on_delete=self._delete_row,
+            deck_card_names=self.deck_card_names,
         )
         self.rows.append(row)
         self._rebuild_layout()
@@ -632,6 +799,7 @@ class CardEffectsDialog(QDialog):
         config_key: str,
         display_name: str,
         is_enhance: bool,
+        deck_card_names: Optional[List[str]] = None,
     ):
         super().__init__(parent)
         self.parent_widget = parent
@@ -639,6 +807,7 @@ class CardEffectsDialog(QDialog):
         self.config_key = str(config_key or base_name or "")
         self.display_name = str(display_name or base_name or "")
         self.is_enhance = bool(is_enhance)
+        self.deck_card_names = list(deck_card_names or [])
 
         self.setWindowTitle(f"特殊效果 - {self.display_name}")
         self.resize(920, 520)
@@ -708,7 +877,7 @@ class CardEffectsDialog(QDialog):
 
             group = QGroupBox(str(t.get("label") or tid))
             group_lay = QVBoxLayout(group)
-            editor = TriggerEditor(trigger_id=tid, context_kind=ck)
+            editor = TriggerEditor(trigger_id=tid, context_kind=ck, deck_card_names=self.deck_card_names)
             group_lay.addWidget(editor)
 
             self.scroll_layout.addWidget(group)

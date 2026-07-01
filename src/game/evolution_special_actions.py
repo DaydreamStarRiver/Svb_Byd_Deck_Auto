@@ -13,6 +13,7 @@ class EvolutionSpecialActions:
     
     def __init__(self, device_state):
         self.device_state = device_state
+        self._force_post_evolve_hand_refresh = False
     
     def handle_evolve_special_action(
         self,
@@ -29,6 +30,7 @@ class EvolutionSpecialActions:
         is_super_evolution: 是否为超进化
         existing_followers: 已扫描的随从结果，避免重复扫描
         """
+        self._force_post_evolve_hand_refresh = False
         trigger = "on_super_evolve" if is_super_evolution else "on_evolve"
 
         effect_key = str(follower_name or "")
@@ -78,6 +80,11 @@ class EvolutionSpecialActions:
             o for o in ops if isinstance(o, dict) and str(o.get("op") or "") == "select_option"
         ]
 
+        pre_action_followers = list(existing_followers or []) if existing_followers else None
+        pre_action_count = len(pre_action_followers) if pre_action_followers is not None else None
+        if pre_action_followers is None and self._ops_require_pre_action_our_followers(ops):
+            pre_action_followers, pre_action_count = self._scan_pre_action_our_followers()
+
         ctx = FollowerContext(
             device_state=self.device_state,
             follower_name=str(effect_key or follower_name or ""),
@@ -86,6 +93,8 @@ class EvolutionSpecialActions:
             follower_uid=int(source_uid) if source_uid is not None else None,
             is_super_evolution=bool(is_super_evolution),
             existing_followers=existing_followers,
+            pre_action_our_followers=pre_action_followers,
+            pre_action_our_follower_count=pre_action_count,
         )
         run_result = EffectEngine.run_ops(ops, ctx=ctx, trigger_id=trigger)
 
@@ -127,4 +136,46 @@ class EvolutionSpecialActions:
                 pass
             return False
 
+        self._force_post_evolve_hand_refresh = bool(
+            getattr(ctx, "force_post_play_hand_refresh", False)
+        )
         return True
+
+    @staticmethod
+    def _ops_require_pre_action_our_followers(ops) -> bool:
+        for step in list(ops or []):
+            if isinstance(step, dict) and str(step.get("op") or "") == "select_option_by_our_followers":
+                return True
+        return False
+
+    def _scan_pre_action_our_followers(self):
+        try:
+            game_manager = getattr(self.device_state, "game_manager", None)
+            if game_manager is None:
+                return None, None
+            screenshot = self.device_state.take_screenshot()
+            if screenshot is None:
+                return None, None
+            followers = game_manager.scan_our_followers(
+                screenshot,
+                extra_shots=0,
+                with_names=True,
+            )
+            followers_list = list(followers or [])
+            try:
+                runtime = getattr(self.device_state, "battle_runtime_state", None)
+                if runtime is not None and hasattr(runtime, "sync_ours"):
+                    runtime.sync_ours(followers_list)
+            except Exception:
+                pass
+            try:
+                self.device_state.logger.info(f"[Effect] pre_action_our_followers count={len(followers_list)}")
+            except Exception:
+                pass
+            return followers_list, len(followers_list)
+        except Exception as e:
+            try:
+                self.device_state.logger.warning(f"[Effect] pre_action_our_followers scan failed: {e}")
+            except Exception:
+                pass
+            return None, None

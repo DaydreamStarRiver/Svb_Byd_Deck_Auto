@@ -20,6 +20,7 @@ class CardPlaySpecialActions:
         self._extra_cost_bonus = 0
         self._should_not_consume_cost = False
         self._should_remove_from_hand = False
+        self._force_post_play_hand_refresh = False
         self._preplay_origin_tag_attempted = False
         self._preplay_origin_tag_succeeded = False
     
@@ -28,6 +29,7 @@ class CardPlaySpecialActions:
         self._extra_cost_bonus = 0
         self._should_not_consume_cost = False
         self._should_remove_from_hand = False
+        self._force_post_play_hand_refresh = False
         self._preplay_origin_tag_attempted = False
         self._preplay_origin_tag_succeeded = False
 
@@ -48,6 +50,11 @@ class CardPlaySpecialActions:
         ops = normalize_effect_steps_to_ops(steps)
 
         if ops:
+            pre_action_followers = None
+            pre_action_count = None
+            if self._ops_require_pre_action_our_followers(ops):
+                pre_action_followers, pre_action_count = self._scan_pre_action_our_followers()
+
             # Normal play drag, then run post-play ops.
             self._default_card_play(center_x, center_y, target_x)
             time.sleep(0.2)
@@ -81,8 +88,13 @@ class CardPlaySpecialActions:
                 follower_pos=source_pos,
                 follower_uid=int(source_uid) if source_uid is not None else None,
                 card=dict(card or {}),
+                pre_action_our_followers=pre_action_followers,
+                pre_action_our_follower_count=pre_action_count,
             )
             run_result = EffectEngine.run_ops(ops, ctx=ctx, trigger_id="on_play")
+            self._force_post_play_hand_refresh = bool(
+                getattr(ctx, "force_post_play_hand_refresh", False)
+            )
 
             try:
                 bonus = int(getattr(ctx, "extra_cost_bonus", 0) or 0)
@@ -137,6 +149,45 @@ class CardPlaySpecialActions:
             if str(step.get("op") or "") in ("buff", "buff_attack_times"):
                 return True
         return False
+
+    @staticmethod
+    def _ops_require_pre_action_our_followers(ops) -> bool:
+        for step in list(ops or []):
+            if isinstance(step, dict) and str(step.get("op") or "") == "select_option_by_our_followers":
+                return True
+        return False
+
+    def _scan_pre_action_our_followers(self):
+        try:
+            game_manager = getattr(self.device_state, "game_manager", None)
+            if game_manager is None:
+                return None, None
+            screenshot = self.device_state.take_screenshot()
+            if screenshot is None:
+                return None, None
+            followers = game_manager.scan_our_followers(
+                screenshot,
+                extra_shots=0,
+                with_names=True,
+            )
+            followers_list = list(followers or [])
+            try:
+                runtime = getattr(self.device_state, "battle_runtime_state", None)
+                if runtime is not None and hasattr(runtime, "sync_ours"):
+                    runtime.sync_ours(followers_list)
+            except Exception:
+                pass
+            try:
+                self.device_state.logger.info(f"[Effect] pre_action_our_followers count={len(followers_list)}")
+            except Exception:
+                pass
+            return followers_list, len(followers_list)
+        except Exception as e:
+            try:
+                self.device_state.logger.warning(f"[Effect] pre_action_our_followers scan failed: {e}")
+            except Exception:
+                pass
+            return None, None
 
     def _tag_played_follower_origin(self, *, card_name: str, cfg_key: str):
         """Try to tag the just-played follower with its cfg key."""

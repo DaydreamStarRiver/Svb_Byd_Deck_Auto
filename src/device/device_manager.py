@@ -6,6 +6,7 @@
 import threading
 import logging
 import time
+import re
 
 import cv2
 import numpy as np
@@ -154,10 +155,21 @@ class DeviceManager:
         max_retries = 5
         retry_delay = 10
 
+        def _is_tcp_serial(value: str) -> bool:
+            return bool(re.match(r"^[^:\s]+:\d+$", str(value or "").strip()))
+
         for attempt in range(1, max_retries + 1):
             try:
                 from adbutils import adb
                 import uiautomator2 as u2
+
+                if _is_tcp_serial(serial):
+                    try:
+                        msg = adb.connect(serial, timeout=5)
+                        if msg:
+                            logger.info(f"adb connect {serial}: {msg}")
+                    except Exception as e:
+                        logger.warning(f"adb connect {serial} 失败: {e}")
 
                 # 直接连接设备
                 adb_device = adb.device(serial)

@@ -169,10 +169,31 @@ class CardPriorityPage(QWidget):
             config_key=str(config_key or base_name or ""),
             display_name=str(display_name or base_name or ""),
             is_enhance=bool(is_enhance),
+            deck_card_names=self._current_deck_card_names(),
         )
         res = dlg.exec_()
         if res == QDialog.Accepted:
             self.refresh_card_priority()
+
+    def _current_deck_card_names(self) -> list:
+        names = []
+        seen = set()
+        for card in getattr(self, "card_widgets", []) or []:
+            if not isinstance(card, dict) or bool(card.get("is_enhance")):
+                continue
+            name = str(card.get("card_name") or "").strip()
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+        if names:
+            return names
+
+        for name in (getattr(self, "config_data", {}) or {}).get("high_priority_cards", {}).keys():
+            base = str(name or "").split("_enhance_", 1)[0].strip()
+            if base and base not in seen:
+                seen.add(base)
+                names.append(base)
+        return names
 
     def show_card_settings_help(self):
         """显示卡牌设置帮助"""
