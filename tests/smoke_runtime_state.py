@@ -1,10 +1,14 @@
 import sys
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.game.battle_runtime import BattleRuntimeState
 from src.game.domain import FollowerRuntimeState
+from src.game.template_manager import GALA_BACK_PARK_THRESHOLD, TemplateManager
 
 
 def _ours(uid: int, x: int, name: str, *, miss_count: int = 0, cfg_key: str = "") -> FollowerRuntimeState:
@@ -70,12 +74,38 @@ def test_active_attack_pending_accepts_raw_normal_downgrade() -> None:
     assert rt.ours[0].follower_type == "normal"
 
 
+def test_gala_back_park_accepts_minor_rendering_variation() -> None:
+    manager = TemplateManager({"is_global": True})
+    template_info = manager.load_templates({})["gala_BackPark"]
+    template = template_info["template"]
+
+    # 固定噪声模拟不同模拟器渲染后产生的轻微抗锯齿差异。
+    rng = np.random.default_rng(20260717)
+    rendered = np.clip(
+        template.astype(np.float32) + rng.normal(0, 18, template.shape),
+        0,
+        255,
+    ).astype(np.uint8)
+    canvas = np.full(
+        (template.shape[0] + 4, template.shape[1] + 4),
+        int(np.median(template)),
+        dtype=np.uint8,
+    )
+    canvas[2:-2, 2:-2] = rendered
+
+    _, score = manager.match_template(canvas, template_info)
+
+    assert template_info["threshold"] == GALA_BACK_PARK_THRESHOLD
+    assert GALA_BACK_PARK_THRESHOLD <= score < 0.85
+
+
 if __name__ == "__main__":
     for fn in (
         test_missed_state_not_selected_for_latest_play_origin,
         test_find_ours_pos_by_cfg_key_ignores_missed_state,
         test_attack_pending_timeout_does_not_accept_raw_normal_downgrade,
         test_active_attack_pending_accepts_raw_normal_downgrade,
+        test_gala_back_park_accepts_minor_rendering_variation,
     ):
         fn()
     print("smoke_runtime_state: ok")
