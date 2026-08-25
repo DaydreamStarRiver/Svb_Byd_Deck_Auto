@@ -14,6 +14,10 @@ from src.utils.resource_utils import resource_path
 logger = logging.getLogger(__name__)
 
 
+# 结算页的“返回乐园”文字会随渲染后端产生轻微抗锯齿差异，单独放宽阈值。
+GALA_BACK_PARK_THRESHOLD = 0.82
+
+
 class TemplateManager:
     """模板管理器类"""
     
@@ -70,7 +74,11 @@ class TemplateManager:
             'gala_Ok': self._create_template_info('gala_Ok.png', "庆典广场_准备完成"),
             'gala_war': self._create_template_info('gala_war.png', "庆典广场_对战"),
             'gala_index': self._create_template_info('gala_index.png', "庆典广场_索引对战"),
-            'gala_BackPark': self._create_template_info('gala_BackPark.png', "庆典广场_返回乐园"),
+            'gala_BackPark': self._create_template_info(
+                'gala_BackPark.png',
+                "庆典广场_返回乐园",
+                threshold=GALA_BACK_PARK_THRESHOLD,
+            ),
         }
 
         # 加载额外模板
