@@ -8,11 +8,15 @@ from typing import Optional, Sequence
 from PyQt5.QtCore import QRectF, QSize, Qt
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QFrame,
     QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -195,7 +199,7 @@ class StatisticsPage(QWidget):
         title = QLabel("\u7edf\u8ba1\u5206\u6790")
         title.setObjectName("PageTitle")
         subtitle = QLabel(
-            "\u67e5\u770b\u5bf9\u6218\u6570\u91cf\u3001\u5c40\u65f6\u548c\u56de\u5408\u8d8b\u52bf"
+            "查看对战数量、胜负、胜率、局时和回合趋势"
         )
         subtitle.setObjectName("SubtleText")
         root_layout.addWidget(title)
@@ -209,14 +213,53 @@ class StatisticsPage(QWidget):
         self.duration_card = MetricCard("\u5e73\u5747\u5c40\u65f6", "#5aa9fa")
         self.rounds_card = MetricCard("\u5e73\u5747\u56de\u5408", "#f1b85b")
         self.run_card = MetricCard("\u672c\u6b21\u8fd0\u884c", "#ec7f86")
+        self.win_card = MetricCard("胜利", "#45c7a4")
+        self.loss_card = MetricCard("失败", "#ec7f86")
+        self.win_rate_card = MetricCard("胜率", "#5aa9fa")
+        self.unknown_card = MetricCard("未判定", "#9aa4b2")
 
         metrics_layout.addWidget(self.today_card, 0, 0)
         metrics_layout.addWidget(self.duration_card, 0, 1)
         metrics_layout.addWidget(self.rounds_card, 0, 2)
         metrics_layout.addWidget(self.run_card, 0, 3)
+        metrics_layout.addWidget(self.win_card, 1, 0)
+        metrics_layout.addWidget(self.loss_card, 1, 1)
+        metrics_layout.addWidget(self.win_rate_card, 1, 2)
+        metrics_layout.addWidget(self.unknown_card, 1, 3)
         for column in range(4):
             metrics_layout.setColumnStretch(column, 1)
         root_layout.addLayout(metrics_layout)
+
+        deck_panel = QFrame()
+        deck_panel.setObjectName("SurfacePanel")
+        deck_layout = QVBoxLayout(deck_panel)
+        deck_layout.setContentsMargins(18, 14, 18, 14)
+        deck_layout.setSpacing(8)
+        deck_header = QHBoxLayout()
+        deck_header.addWidget(QLabel("各卡组战绩"))
+        deck_header.addStretch(1)
+        deck_hint = QLabel("按本地构筑汇总；旧记录会列为未标记")
+        deck_hint.setObjectName("SubtleText")
+        deck_header.addWidget(deck_hint)
+        deck_layout.addLayout(deck_header)
+        self.deck_stats_table = QTableWidget(0, 7)
+        self.deck_stats_table.setHorizontalHeaderLabels(
+            ["本地构筑", "游戏槽位", "对局", "胜", "负", "胜率", "未判定"]
+        )
+        self.deck_stats_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.deck_stats_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.deck_stats_table.setAlternatingRowColors(True)
+        self.deck_stats_table.verticalHeader().setVisible(False)
+        self.deck_stats_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.Stretch
+        )
+        for column in range(1, 7):
+            self.deck_stats_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeToContents
+            )
+        self.deck_stats_table.setMinimumHeight(155)
+        self.deck_stats_table.setMaximumHeight(230)
+        deck_layout.addWidget(self.deck_stats_table)
 
         chart_panel = QFrame()
         chart_panel.setObjectName("SurfacePanel")
@@ -237,7 +280,11 @@ class StatisticsPage(QWidget):
 
         self.daily_chart = DailyBattleChart()
         chart_layout.addWidget(self.daily_chart, 1)
-        root_layout.addWidget(chart_panel, 1)
+        analysis_layout = QHBoxLayout()
+        analysis_layout.setSpacing(12)
+        analysis_layout.addWidget(deck_panel, 3)
+        analysis_layout.addWidget(chart_panel, 2)
+        root_layout.addLayout(analysis_layout, 1)
 
         run_panel = QFrame()
         run_panel.setObjectName("SurfacePanel")
@@ -287,7 +334,24 @@ class StatisticsPage(QWidget):
             "%.1f" % snapshot.overall.average_rounds,
             "\u6837\u672c %d \u5c40" % snapshot.overall.rounds_sample_count,
         )
+        self.win_card.set_metric(
+            str(snapshot.overall.wins),
+            "今日 %d 胜" % snapshot.today.wins,
+        )
+        self.loss_card.set_metric(
+            str(snapshot.overall.losses),
+            "今日 %d 负" % snapshot.today.losses,
+        )
+        self.win_rate_card.set_metric(
+            "%.1f%%" % (snapshot.overall.win_rate * 100.0),
+            "已判定 %d 局" % snapshot.overall.decided_count,
+        )
+        self.unknown_card.set_metric(
+            str(snapshot.overall.unknown_results),
+            "含旧记录与中途停止",
+        )
         self.daily_chart.set_data(snapshot.daily_counts)
+        self._update_deck_table(snapshot)
 
         source_text = "\u5df2\u8bfb\u53d6 %d \u4e2a\u7edf\u8ba1\u6587\u4ef6" % snapshot.files_loaded
         if snapshot.files_failed:
@@ -295,6 +359,29 @@ class StatisticsPage(QWidget):
         self.source_label.setText(source_text)
         self._update_run_widgets()
         return snapshot
+
+    def _update_deck_table(self, snapshot: StatisticsSnapshot) -> None:
+        summaries = tuple(snapshot.deck_summaries or ())
+        self.deck_stats_table.setRowCount(len(summaries))
+        for row, summary in enumerate(summaries):
+            aggregate = summary.aggregate
+            slot_text = ", ".join(str(slot) for slot in summary.slots) or "--"
+            values = (
+                summary.deck_name,
+                slot_text,
+                str(aggregate.battle_count),
+                str(aggregate.wins),
+                str(aggregate.losses),
+                "%.1f%%" % (aggregate.win_rate * 100.0),
+                str(aggregate.unknown_results),
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column >= 1:
+                    item.setTextAlignment(Qt.AlignCenter)
+                if column == 0 and summary.deck_file:
+                    item.setToolTip(summary.deck_file)
+                self.deck_stats_table.setItem(row, column, item)
 
     def set_live_stats(self, runtime_seconds: float, battle_count: int) -> None:
         """由控制器注入当前进程运行时长和对战次数。"""
@@ -349,10 +436,14 @@ class StatisticsPage(QWidget):
         run_id = self._snapshot.current_run_id or "--"
         self.run_summary_label.setText(
             "Run ID: %s    \u5df2\u4fdd\u5b58 %d \u5c40    "
+            "胜 %d / 负 %d    胜率 %.1f%%    "
             "\u5e73\u5747\u5c40\u65f6 %s    \u5e73\u5747\u56de\u5408 %.1f"
             % (
                 run_id,
                 aggregate.battle_count,
+                aggregate.wins,
+                aggregate.losses,
+                aggregate.win_rate * 100.0,
                 _format_duration(aggregate.average_duration_seconds),
                 aggregate.average_rounds,
             )

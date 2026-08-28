@@ -140,8 +140,35 @@ class DeviceState:
         self.match_start_time: Optional[float] = None
         self.match_history: List[Dict[str, Any]] = []
         self.current_run_matches = 0
+        self.current_run_wins = 0
         self.current_run_start_time = datetime.datetime.now()
         self.in_match = False
+        ui_config = config.get("ui", {}) if isinstance(config, dict) else {}
+        active_snapshot = (
+            ui_config.get("active_deck_snapshot", {})
+            if isinstance(ui_config, dict)
+            else {}
+        )
+        if not isinstance(active_snapshot, dict):
+            active_snapshot = {}
+        self.active_deck_slot: Optional[int] = None
+        self.active_deck_file = str(active_snapshot.get("deck_file") or "").strip()
+        self.active_deck_name = str(active_snapshot.get("name") or "").strip()
+        self.match_deck_slot: Optional[int] = None
+        self.match_deck_file = ""
+        self.match_deck_name = ""
+        self.runtime_deck_profile_active = False
+        self.deck_rotation_runtime_state: Dict[str, Any] = {}
+        self.battle_observation = None
+        self.enemy_leader_hp: Optional[int] = None
+        self.our_leader_hp: Optional[int] = None
+        self.enemy_follower_stats: List[Dict[str, Any]] = []
+        self.our_follower_stats: List[Dict[str, Any]] = []
+        self.observed_pp_current: Optional[int] = None
+        self.observed_pp_maximum: Optional[int] = None
+        self.observed_evolution_points: Optional[int] = None
+        self.observed_super_evolution_points: Optional[int] = None
+        self.observed_extra_pp_state = "unknown"
 
         # 命令和通知
         self.command_queue = queue.Queue()
@@ -150,7 +177,13 @@ class DeviceState:
         self.last_stage_change_time = time.time()
         self.has_clicked_plus_this_round = False
         self.stop_after_current_match = False
+        self.stop_after_match_reason = ""
         self.mulligan_done_this_match = False
+
+        run_settings = config.get("run_settings", {}) if isinstance(config, dict) else {}
+        if not isinstance(run_settings, dict):
+            run_settings = {}
+        self.target_wins = max(0, _safe_int(run_settings.get("target_wins", 0), 0))
 
         # 额外费用点状态管理
         self.extra_cost_used_early = False  # 1-5回合是否已使用额外费用点
@@ -350,8 +383,8 @@ class DeviceState:
 
         self.stop_reason = str(reason or "manual")
 
-            # 达到运行时长上限时，还需要关闭设备上的游戏应用。
-        if self.stop_reason == "runtime_limit":
+        # 自动停止条件达成时，同时关闭设备上的游戏应用；手动停止仍只停脚本。
+        if self.stop_reason in {"runtime_limit", "target_wins"}:
             try:
                 self.stop_shadowverse_apps(trigger=self.stop_reason)
             except Exception:
@@ -735,10 +768,14 @@ class DeviceState:
         self.logger.info(f"截图保存 [{scene}]: {filepath}")
         return filepath
 
-    def end_current_match(self):
+    def end_current_match(self, result: Optional[str] = None):
         """结束当前对战并记录统计数据"""
         if self.match_start_time is None:
             return
+
+        normalized_result = str(result or "unknown").strip().lower()
+        if normalized_result not in {"win", "loss"}:
+            normalized_result = "unknown"
 
         match_duration = time.time() - self.match_start_time
         minutes, seconds = divmod(match_duration, 60)
@@ -748,9 +785,29 @@ class DeviceState:
             "rounds": self.current_round_count,
             "duration": f"{int(minutes)}分{int(seconds)}秒",
             "run_id": self.current_run_start_time.strftime("%Y%m%d%H%M%S"),
+            "result": normalized_result,
+            "deck_slot": self.match_deck_slot,
+            "deck_file": self.match_deck_file,
+            "deck_name": self.match_deck_name,
         }
 
         self.match_history.append(match_record)
+
+        if normalized_result == "win":
+            self.current_run_wins += 1
+            if self.target_wins > 0:
+                self.logger.info(
+                    "[运行限制] 本次胜场 %d/%d",
+                    self.current_run_wins,
+                    self.target_wins,
+                )
+                if self.current_run_wins >= self.target_wins:
+                    self.stop_after_current_match = True
+                    self.stop_after_match_reason = "target_wins"
+                    self.logger.info(
+                        "[运行限制] 已达到目标胜场 %d，将在结算页停止脚本",
+                        self.target_wins,
+                    )
 
         # 保存统计数据到文件
         self.save_round_statistics()
@@ -759,6 +816,10 @@ class DeviceState:
         self.logger.info(
             f"回合数: {self.current_round_count}, 持续时间: {int(minutes)}分{int(seconds)}秒"
         )
+        result_label = {"win": "胜利", "loss": "失败", "unknown": "未判定"}[
+            normalized_result
+        ]
+        self.logger.info(f"对战结果: {result_label}")
 
         # 重置对战状态
         self.match_start_time = None
@@ -767,6 +828,73 @@ class DeviceState:
         self.evolution_point = 2
         self.super_evolution_point = 2
         self.cost_cap_bonus = 0
+        self.match_deck_slot = None
+        self.match_deck_file = ""
+        self.match_deck_name = ""
+        self._clear_battle_observation()
+
+    def set_active_deck_profile(
+        self,
+        *,
+        slot: Optional[int],
+        filename: str,
+        name: str,
+    ) -> None:
+        """更新下一场对战应使用的设备级构筑身份。"""
+
+        self.active_deck_slot = int(slot) if slot is not None else None
+        self.active_deck_file = os.path.basename(str(filename or "").strip())
+        self.active_deck_name = str(name or "").strip()
+
+    def _clear_battle_observation(self) -> None:
+        self.battle_observation = None
+        self.enemy_leader_hp = None
+        self.our_leader_hp = None
+        self.enemy_follower_stats = []
+        self.our_follower_stats = []
+        self.observed_pp_current = None
+        self.observed_pp_maximum = None
+        self.observed_evolution_points = None
+        self.observed_super_evolution_points = None
+        self.observed_extra_pp_state = "unknown"
+
+    def update_battle_observation(self, observation: Any) -> None:
+        """Expose the latest recognized battle values to strategies and UI workers."""
+
+        self.battle_observation = observation
+        self.enemy_leader_hp = getattr(observation, "enemy_leader_hp", None)
+        self.our_leader_hp = getattr(observation, "our_leader_hp", None)
+        self.enemy_follower_stats = [
+            {
+                "x": item.x,
+                "y": item.y,
+                "attack": item.attack,
+                "health": item.health,
+                "kind": item.kind,
+            }
+            for item in getattr(observation, "enemy_followers", ())
+        ]
+        self.our_follower_stats = [
+            {
+                "x": item.x,
+                "y": item.y,
+                "attack": item.attack,
+                "health": item.health,
+                "kind": item.kind,
+            }
+            for item in getattr(observation, "our_followers", ())
+        ]
+        self.observed_pp_current = getattr(observation, "pp_current", None)
+        self.observed_pp_maximum = getattr(observation, "pp_maximum", None)
+        self.observed_evolution_points = getattr(observation, "evolution_points", None)
+        self.observed_super_evolution_points = getattr(
+            observation,
+            "super_evolution_points",
+            None,
+        )
+        self.observed_extra_pp_state = str(
+            getattr(observation, "extra_pp_state", "unknown") or "unknown"
+        )
 
     def save_round_statistics(self):
         """保存回合统计数据到文件"""
@@ -991,6 +1119,7 @@ class DeviceState:
         self.cost_cap_bonus = 0
         self.cost_history.clear()
         self.mulligan_done_this_match = False
+        self._clear_battle_observation()
 
     def start_new_match(self):
         """开始新对战"""
@@ -1010,6 +1139,9 @@ class DeviceState:
         self.current_run_matches += 1
         self.match_start_time = time.time()
         self.in_match = True
+        self.match_deck_slot = self.active_deck_slot
+        self.match_deck_file = self.active_deck_file
+        self.match_deck_name = self.active_deck_name
         self.current_round_count = 1
         self.evolution_point = 2
         self.super_evolution_point = 2
@@ -1025,8 +1157,18 @@ class DeviceState:
         self.cost_cap_bonus = 0
         self.cost_history.clear()
         self.mulligan_done_this_match = False
+        self._clear_battle_observation()
 
-        self.logger.info(f"检测到新对战开始 - 第{self.current_run_matches}场对战")
+        deck_label = self.match_deck_name or self.match_deck_file or "未标记卡组"
+        slot_label = (
+            f"槽位 {self.match_deck_slot} / "
+            if self.match_deck_slot is not None
+            else ""
+        )
+        self.logger.info(
+            f"检测到新对战开始 - 第{self.current_run_matches}场对战 "
+            f"({slot_label}{deck_label})"
+        )
         # 将对战次数信息发送到日志队列，供UI界面显示
         if self.log_queue is not None:
             self.log_queue.put(f"[对战开始] 第{self.current_run_matches}场对战")

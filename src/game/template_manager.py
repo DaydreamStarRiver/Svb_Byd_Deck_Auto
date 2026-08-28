@@ -16,6 +16,33 @@ logger = logging.getLogger(__name__)
 
 # 结算页的“返回乐园”文字会随渲染后端产生轻微抗锯齿差异，单独放宽阈值。
 GALA_BACK_PARK_THRESHOLD = 0.82
+SETTLEMENT_TEMPLATE_THRESHOLD = 0.80
+
+
+PAGE_TEXT_ALIASES = {
+    "decision": ("决定", "決定", "DECIDE"),
+    "end_round": ("结束回合", "結束回合", "回合结束", "回合結束", "END TURN"),
+    # “散方”是 Maa zh_cn 对繁体花字“敵方”的稳定输出，保留为校准别名。
+    "enemy_round": ("敌方回合", "敵方回合", "散方", "OPPONENT TURN"),
+    "mainPage": (
+        "随机对战",
+        "隨機對戰",
+        "随機對戰",
+        # Maa 对入口花字的已校准输出；保持为完整短语，避免使用单机页也会出现的“随机”。
+        "随機封戟",
+        "随機对",
+        "随机对",
+        "阶级对战",
+        "階級對戰",
+    ),
+    "LoginPage": ("正在排队", "正在排隊", "MATCHING"),
+    "enterGame": ("进入对战", "進入對戰", "ENTER"),
+    "error_retry": ("重试", "重試", "RETRY"),
+    "win": ("WIN", "胜利", "勝利"),
+    "result": ("RESULT", "失败", "失敗", "败北", "敗北"),
+    "deck_confirm_dialog": ("确认牌组", "確認牌組"),
+    "deck_selection_page": ("选择牌组", "選擇牌組"),
+}
 
 
 class TemplateManager:
@@ -29,6 +56,7 @@ class TemplateManager:
         self.templates: Dict[str, Dict[str, Any]] = {}
         self.evolution_template = None
         self.super_evolution_template = None
+        self.text_recognition = None
         
         # 记录模板目录选择
         logger.info(f"模板管理器初始化: 使用目录 '{self.templates_dir}'")
@@ -37,6 +65,11 @@ class TemplateManager:
         """返回当前选择的模板目录名称。"""
 
         return self.templates_dir
+
+    def set_text_recognition(self, recognition: Any) -> None:
+        """Attach the optional Maa page-text fallback service."""
+
+        self.text_recognition = recognition
 
     def get_template_path(self, filename: str) -> str:
         """获取模板文件路径（尽量与旧逻辑兼容）。
@@ -66,6 +99,30 @@ class TemplateManager:
             'enemy_round': self._create_template_info('enemy_round.png', "敌方回合"),
             'end': self._create_template_info('end.png', "结束"),
             'war': self._create_template_info('war.png', "决斗"),
+            'win': self._create_template_info(
+                'win.png',
+                "胜利结算",
+                threshold=SETTLEMENT_TEMPLATE_THRESHOLD,
+                multiscale=True,
+            ),
+            'result': self._create_template_info(
+                'result.png',
+                "失败结算",
+                threshold=SETTLEMENT_TEMPLATE_THRESHOLD,
+                multiscale=True,
+            ),
+            'deck_confirm_dialog': self._create_optional_template_info(
+                'deck_confirm_dialog.png',
+                "确认牌组弹窗",
+                threshold=0.72,
+                multiscale=True,
+            ),
+            'deck_selection_page': self._create_optional_template_info(
+                'Select_Deck.png',
+                "选择牌组页面",
+                threshold=0.72,
+                multiscale=True,
+            ),
             'mainPage': self._create_template_info('mainPage.png', "游戏主页面"),
             'MuMuPage': self._create_template_info('MuMuPage.png', "MuMu主页面"),
             'LoginPage': self._create_template_info('LoginPage.png', "排队主界面"),
@@ -96,6 +153,10 @@ class TemplateManager:
                     templates[k] = v
 
         self.templates = {k: v for k, v in templates.items() if v is not None}
+        for key, template_info in self.templates.items():
+            aliases = PAGE_TEXT_ALIASES.get(key)
+            if aliases:
+                template_info["text_aliases"] = aliases
         logger.info("模板加载完成")
         return self.templates
 
@@ -155,13 +216,36 @@ class TemplateManager:
         name: str,
         threshold: float = 0.85,
         hsv_range: Optional[Dict[str, Any]] = None,
+        multiscale: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """创建模板信息字典"""
         template_img = self._load_template(self.templates_dir, filename)
         if template_img is None:
             return None
 
-        return self._create_template_info_from_image(template_img, name, threshold, hsv_range)
+        info = self._create_template_info_from_image(template_img, name, threshold, hsv_range)
+        info["multiscale"] = bool(multiscale)
+        return info
+
+    def _create_optional_template_info(
+        self,
+        filename: str,
+        name: str,
+        threshold: float = 0.85,
+        hsv_range: Optional[Dict[str, Any]] = None,
+        multiscale: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Load an optional feature template without emitting a startup error."""
+
+        if not os.path.exists(self.get_template_path(filename)):
+            return None
+        return self._create_template_info(
+            filename,
+            name,
+            threshold=threshold,
+            hsv_range=hsv_range,
+            multiscale=multiscale,
+        )
 
     def _create_template_info_from_image(
         self,
@@ -185,60 +269,111 @@ class TemplateManager:
         }
 
     def match_template(self, image: np.ndarray, template_info: Dict[str, Any]) -> Tuple[Optional[Tuple[int, int]], float]:
-        """执行模板匹配并返回结果，支持灰度和三通道。若模板注册了hsv_range，则匹配后自动做颜色判定。"""
+        """执行模板匹配并返回结果，支持灰度、多尺度和颜色判定。"""
         if not template_info:
             return None, 0
+        template_info.pop("matched_w", None)
+        template_info.pop("matched_h", None)
         tpl = template_info['template']
         hsv_range = template_info.get('hsv_range', None)
-        # 灰度模板
+
         if len(tpl.shape) == 2:
+            if template_info.get("multiscale"):
+                best_loc = None
+                best_value = -1.0
+                best_width = int(tpl.shape[1])
+                best_height = int(tpl.shape[0])
+                for scale in (0.90, 0.95, 1.0, 1.05, 1.10, 1.15, 1.20):
+                    scaled = cv2.resize(
+                        tpl,
+                        None,
+                        fx=scale,
+                        fy=scale,
+                        interpolation=cv2.INTER_CUBIC,
+                    )
+                    if scaled.shape[0] > image.shape[0] or scaled.shape[1] > image.shape[1]:
+                        continue
+                    result = cv2.matchTemplate(image, scaled, cv2.TM_CCOEFF_NORMED)
+                    _, value, _, loc = cv2.minMaxLoc(result)
+                    if value > best_value:
+                        best_value = float(value)
+                        best_loc = (int(loc[0]), int(loc[1]))
+                        best_width = int(scaled.shape[1])
+                        best_height = int(scaled.shape[0])
+                if best_loc is not None:
+                    template_info["matched_w"] = best_width
+                    template_info["matched_h"] = best_height
+                    return best_loc, best_value
+                return None, 0.0
+
             result = cv2.matchTemplate(image, tpl, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(result)
             if max_loc is not None and isinstance(max_loc, tuple) and len(max_loc) == 2:
                 return (int(max_loc[0]), int(max_loc[1])), float(max_val)
-            else:
-                return None, float(max_val)
-        # 彩色模板
-        else:
-            result = cv2.matchTemplate(image, tpl, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
-            if max_loc is not None and isinstance(max_loc, tuple) and len(max_loc) == 2:
-                h, w, _ = tpl.shape
-                x, y = int(max_loc[0]), int(max_loc[1])
-                roi = image[y:y+h, x:x+w]
-                if roi.shape[0] != h or roi.shape[1] != w:
-                    return None, float(max_val)
-                # 只用V通道判定
-                if hsv_range:
-                    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-                    if 'min_v' in hsv_range:
-                        mean_v = hsv[..., 2].mean()
-                        min_v = hsv_range['min_v']
-                        if mean_v > min_v:
-                            return (x, y), float(max_val)
-                        else:
-                            return None, 0.0
-                    elif 'min' in hsv_range and 'max' in hsv_range:
-                        min_h, min_s, min_v = hsv_range['min']
-                        max_h, max_s, max_v = hsv_range['max']
-                        # 只要有一个像素在区间内即判定成功
-                        mask = (
-                            (hsv[..., 0] >= min_h) & (hsv[..., 0] <= max_h) &
-                            (hsv[..., 1] >= min_s) & (hsv[..., 1] <= max_s) &
-                            (hsv[..., 2] >= min_v) & (hsv[..., 2] <= max_v)
-                        )
-                        if np.any(mask):
-                            return (x, y), float(max_val)
-                        else:
-                            return None, 0.0
-                    else:
-                        # 没有有效的判定区间，直接返回
-                        return (x, y), float(max_val)
-                else:
-                    # 没有颜色判定，直接返回
-                    return (x, y), float(max_val)
-            else:
-                return None, float(max_val)
+            return None, float(max_val)
+
+        result = cv2.matchTemplate(image, tpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        if max_loc is None or not isinstance(max_loc, tuple) or len(max_loc) != 2:
+            return None, float(max_val)
+
+        h, w, _ = tpl.shape
+        x, y = int(max_loc[0]), int(max_loc[1])
+        roi = image[y:y+h, x:x+w]
+        if roi.shape[0] != h or roi.shape[1] != w:
+            return None, float(max_val)
+        if not hsv_range:
+            return (x, y), float(max_val)
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        if 'min_v' in hsv_range:
+            return ((x, y), float(max_val)) if hsv[..., 2].mean() > hsv_range['min_v'] else (None, 0.0)
+        if 'min' in hsv_range and 'max' in hsv_range:
+            min_h, min_s, min_v = hsv_range['min']
+            max_h, max_s, max_v = hsv_range['max']
+            mask = (
+                (hsv[..., 0] >= min_h) & (hsv[..., 0] <= max_h) &
+                (hsv[..., 1] >= min_s) & (hsv[..., 1] <= max_s) &
+                (hsv[..., 2] >= min_v) & (hsv[..., 2] <= max_v)
+            )
+            return ((x, y), float(max_val)) if np.any(mask) else (None, 0.0)
+        return (x, y), float(max_val)
+
+    def match_text_key(
+        self,
+        image: np.ndarray,
+        key: str,
+    ) -> Tuple[Optional[Tuple[int, int]], float]:
+        """Match one registered page key through Maa page OCR only."""
+
+        template_info = self.templates.get(key)
+        recognition = self.text_recognition
+        if not template_info or recognition is None:
+            return None, 0.0
+        aliases = template_info.get("text_aliases", ())
+        if not aliases:
+            return None, 0.0
+        item = recognition.match_page_aliases(image, aliases)
+        if item is None:
+            return None, 0.0
+        x, y, width, height = item.box
+        template_info["matched_w"] = max(1, int(width))
+        template_info["matched_h"] = max(1, int(height))
+        return (int(x), int(y)), max(float(item.score), float(template_info["threshold"]))
+
+    def find_page_text_match(
+        self,
+        image: np.ndarray,
+    ) -> Optional[Tuple[str, Tuple[int, int], float]]:
+        """Return the first strong page-text fallback among registered keys."""
+
+        for key in PAGE_TEXT_ALIASES:
+            if key not in self.templates:
+                continue
+            location, score = self.match_text_key(image, key)
+            if location is not None:
+                return key, location, score
+        return None
 
     def load_evolution_template(self) -> Optional[Dict[str, Any]]:
         """加载进化按钮模板，完整HSV区间判定"""

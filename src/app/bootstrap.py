@@ -9,9 +9,15 @@ import logging
 import threading
 import traceback
 import queue
+import sys
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
+from src.app.native_runtime import (
+    loaded_cpp_runtime_paths,
+    prepare_windows_cpp_runtime,
+)
 from src.config.config_manager import ConfigManager
+from src.config.settings import EXPERIMENTAL_MAA_RECOGNITION_ENABLED
 from src.core.logging_utils import setup_logging
 from src.utils.consent_utils import display_disclaimer_and_get_consent
 from src.utils.gpu_utils import get_easyocr_reader, setup_gpu
@@ -91,7 +97,9 @@ def run_cli(
 
     logger: logging.Logger = logging.getLogger(__name__)
 
-        # 延迟导入重量级模块，保持界面启动轻量。
+    prepare_windows_cpp_runtime()
+
+    # 延迟导入重量级模块，保持界面启动轻量。
     from src.device.device_manager import DeviceManager
     from src.ui.notification_manager import NotificationManager
 
@@ -132,6 +140,7 @@ def run_cli(
         logger = setup_logging(config_manager.config, log_queue, log_file=log_file)
         logger.info("=== 影之诗自动对战脚本启动 ===")
         logger.info(f"使用配置文件: {config_manager.config_file}")
+        logger.info("[Native] Python=%s; C++ runtime=%s", sys.executable, loaded_cpp_runtime_paths())
 
         # 记录当前启用的卡组与策略档案。
         try:
@@ -166,19 +175,28 @@ def run_cli(
             logger.info("用户未同意免责声明，程序退出")
             return
 
-        # 设置GPU
-        gpu_enabled: bool = bool(setup_gpu())
-        if gpu_enabled:
-            logger.info("OCR识别GPU加速已启用")
+        recognition_config = config_manager.config.get("recognition", {})
+        recognition_backend = str(
+            recognition_config.get("backend", "legacy")
+            if isinstance(recognition_config, dict)
+            else "legacy"
+        ).strip().lower()
+        if EXPERIMENTAL_MAA_RECOGNITION_ENABLED and recognition_backend == "maa":
+            # Maa 在设备线程中按数字/页面语言分别惰性加载模型。
+            logger.info("识别方案: MaaFramework 新版识别（CPU）")
         else:
-            logger.info("OCR识别使用CPU模式")
+            # 设置GPU并全局初始化旧版 EasyOCR，确保子线程共享实例。
+            gpu_enabled: bool = bool(setup_gpu())
+            if gpu_enabled:
+                logger.info("旧版OCR识别GPU加速已启用")
+            else:
+                logger.info("旧版OCR识别使用CPU模式")
 
-        # 全局初始化OCR reader，确保子线程只用全局实例
-        ocr_reader = get_easyocr_reader(gpu_enabled=gpu_enabled)
-        if ocr_reader is not None:
-            logger.info("全局OCR reader初始化成功")
-        else:
-            logger.warning("全局OCR reader初始化失败，后续OCR功能不可用")
+            ocr_reader = get_easyocr_reader(gpu_enabled=gpu_enabled)
+            if ocr_reader is not None:
+                logger.info("全局EasyOCR reader初始化成功")
+            else:
+                logger.warning("全局EasyOCR reader初始化失败，将仅使用MNIST兜底")
 
         # 初始化通知管理器
         notification_manager = NotificationManager()
@@ -227,6 +245,10 @@ def run_gui(argv: Optional[list[str]] = None) -> int:
     """启动 PyQt 图形界面，并复用同一套自动化运行器。"""
 
     import sys as _sys
+
+    # 必须先于任何 PyQt5 导入，避免 Qt 自带旧 MSVCP140 抢占 MAA 的依赖。
+    # 只加载系统运行库，不加载 Maa/EasyOCR 或任何识别模型。
+    prepare_windows_cpp_runtime()
 
     from PyQt5.QtWidgets import QApplication
 

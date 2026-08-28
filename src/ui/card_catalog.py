@@ -48,6 +48,13 @@ class CardEntry:
     category: str
     source_path: str
     relative_path: str
+    card_set_id: str = ""
+    card_set_name: str = "其他"
+    rarity: int = 0
+    rarity_name: str = "其他"
+    card_type: int = 0
+    card_type_name: str = "其他"
+    is_token: bool = False
 
     @property
     def filename(self) -> str:
@@ -82,12 +89,32 @@ def get_card_resource_root(app_root: Optional[str] = None) -> str:
     return current
 
 
-def _load_card_metadata(resource_root: str) -> Dict[str, Tuple[int, str]]:
+@dataclass(frozen=True)
+class CardMetadata:
+    cost: int
+    name: str
+    card_set_id: str = ""
+    card_set_name: str = "其他"
+    rarity: int = 0
+    rarity_name: str = "其他"
+    card_type: int = 0
+    card_type_name: str = "其他"
+    is_token: bool = False
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(str(value or default).strip())
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _load_card_metadata(resource_root: str) -> Dict[str, CardMetadata]:
     csv_path = os.path.join(resource_root, "SV_WB_Cards.csv")
     if not os.path.isfile(csv_path):
         return {}
 
-    metadata: Dict[str, Tuple[int, str]] = {}
+    metadata: Dict[str, CardMetadata] = {}
     try:
         with open(csv_path, "r", encoding="utf-8-sig", newline="") as stream:
             for row in csv.DictReader(stream):
@@ -95,11 +122,21 @@ def _load_card_metadata(resource_root: str) -> Dict[str, Tuple[int, str]]:
                 name = str(row.get("name") or "").strip()
                 if not card_id:
                     continue
-                try:
-                    cost = int(str(row.get("cost") or "0").strip())
-                except (TypeError, ValueError):
-                    cost = 0
-                metadata[card_id] = (cost, name or card_id)
+                metadata[card_id] = CardMetadata(
+                    cost=_safe_int(row.get("cost")),
+                    name=name or card_id,
+                    card_set_id=str(row.get("card_set_id") or "").strip(),
+                    card_set_name=str(row.get("card_set_name") or "其他").strip()
+                    or "其他",
+                    rarity=_safe_int(row.get("rarity")),
+                    rarity_name=str(row.get("rarity_name") or "其他").strip()
+                    or "其他",
+                    card_type=_safe_int(row.get("card_type")),
+                    card_type_name=str(row.get("card_type_name") or "其他").strip()
+                    or "其他",
+                    is_token=str(row.get("is_token") or "").strip().casefold()
+                    in {"1", "true", "yes"},
+                )
     except (OSError, csv.Error, UnicodeError):
         return {}
     return metadata
@@ -158,21 +195,31 @@ def load_card_catalog(resource_root: Optional[str] = None) -> List[CardEntry]:
                 sorted({cost for cost in cost_parts[1:] if cost > filename_cost})
             )
             card_id = match.group("card_id")
-            csv_cost, name = metadata.get(
+            card_metadata = metadata.get(
                 card_id,
-                metadata.get(card_id.split("@", 1)[0], (filename_cost, card_id)),
+                metadata.get(
+                    card_id.split("@", 1)[0],
+                    CardMetadata(filename_cost, card_id),
+                ),
             )
             relative_path = os.path.relpath(item.path, root).replace(os.sep, "/")
             entries.append(
                 CardEntry(
                     key=f"{category}/{card_id}",
                     card_id=card_id,
-                    cost=csv_cost,
+                    cost=card_metadata.cost,
                     enhance_costs=enhance_costs,
-                    name=name,
+                    name=card_metadata.name,
                     category=category,
                     source_path=os.path.abspath(item.path),
                     relative_path=relative_path,
+                    card_set_id=card_metadata.card_set_id,
+                    card_set_name=card_metadata.card_set_name,
+                    rarity=card_metadata.rarity,
+                    rarity_name=card_metadata.rarity_name,
+                    card_type=card_metadata.card_type,
+                    card_type_name=card_metadata.card_type_name,
+                    is_token=card_metadata.is_token,
                 )
             )
 

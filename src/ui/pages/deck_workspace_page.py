@@ -14,12 +14,13 @@ import zlib
 from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional
 
-from PyQt5.QtCore import QMimeData, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QMimeData, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QDrag, QIcon
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -44,6 +45,17 @@ from src.ui.card_catalog import (
     load_card_catalog,
     resolve_card_entry,
 )
+from src.ui.card_library_update import (
+    CardLibraryUpdatePlan,
+    OfficialCardLibraryClient,
+)
+from src.ui.deck_qr import (
+    DeckQrError,
+    decode_qr_bgr,
+    decode_qr_path,
+    parse_official_deck_payload,
+    qimage_to_bgr,
+)
 from src.ui.deck_io import (
     DECK_SCHEMA_VERSION,
     MAX_CARD_COPIES,
@@ -62,25 +74,54 @@ from src.ui.deck_io import (
 
 
 CARD_MIME = "application/x-svb-card-key"
-CUSTOM_DICT = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
 ACTIVE_DECK_STATE_VERSION = 1
 RUNTIME_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
-
-
-def _decode_shortcode(shortcode: str) -> int:
-    if len(shortcode) != 4 or any(ch not in CUSTOM_DICT for ch in shortcode):
-        return 0
-    return (
-        CUSTOM_DICT.index(shortcode[0]) << 18
-        | CUSTOM_DICT.index(shortcode[1]) << 12
-        | CUSTOM_DICT.index(shortcode[2]) << 6
-        | CUSTOM_DICT.index(shortcode[3])
-    )
 
 
 def _safe_deck_name(value: str) -> str:
     name = re.sub(r'[<>:"/\\|?*]+', "_", str(value or "").strip())
     return name.strip(" .")[:80]
+
+
+def _empty_strategy_config() -> Dict[str, Any]:
+    return {
+        "high_priority_cards": {},
+        "evolve_priority_cards": {},
+        "strategy": {"effects": {}},
+    }
+
+
+class CardLibraryUpdateWorker(QThread):
+    progress_signal = pyqtSignal(str)
+    checked_signal = pyqtSignal(object)
+    applied_signal = pyqtSignal(object)
+    failed_signal = pyqtSignal(str)
+
+    def __init__(
+        self,
+        *,
+        resource_root: str,
+        plan: Optional[CardLibraryUpdatePlan] = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.resource_root = str(resource_root or "")
+        self.plan = plan
+
+    def run(self) -> None:
+        client = OfficialCardLibraryClient(
+            progress=self.progress_signal.emit,
+            cancelled=self.isInterruptionRequested,
+        )
+        try:
+            if self.plan is None:
+                self.checked_signal.emit(client.fetch_plan(self.resource_root))
+            else:
+                self.applied_signal.emit(client.apply_plan(self.plan))
+        except Exception as exc:
+            self.failed_signal.emit(str(exc))
+        finally:
+            client.close()
 
 
 class CardLibraryList(QListWidget):
@@ -162,6 +203,7 @@ class DeckWorkspacePage(QWidget):
     log_requested = pyqtSignal(str)
     active_deck_changed = pyqtSignal(dict)
     data_changed = pyqtSignal()
+    device_qr_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -179,8 +221,15 @@ class DeckWorkspacePage(QWidget):
         self.current_deck_file: Optional[str] = None
         self._category_filter = "全部"
         self._cost_filter = "全部"
+        self._card_set_filter = "全部"
+        self._rarity_filter = "全部"
         self._search_filter = ""
         self._library_populated = False
+        self._update_worker: Optional[CardLibraryUpdateWorker] = None
+        self._checked_update_plan: Optional[CardLibraryUpdatePlan] = None
+        self._card_update_result: Optional[Dict[str, Any]] = None
+        self._card_update_error = ""
+        self._card_update_operation = ""
         self.deck_store = getattr(parent, "deck_store", None)
         self._build_ui()
         self._visible_icon_timer = QTimer(self)
@@ -262,10 +311,14 @@ class DeckWorkspacePage(QWidget):
         saved_layout.addWidget(load_button)
         saved_layout.addWidget(delete_button)
         saved_layout.addStretch()
-        refresh_button = QPushButton("刷新卡牌库")
+        refresh_button = QPushButton("重新扫描本地")
         refresh_button.setObjectName("SecondaryButton")
         refresh_button.clicked.connect(self.refresh_catalog)
         saved_layout.addWidget(refresh_button)
+        self.card_update_button = QPushButton("检查官方更新")
+        self.card_update_button.setObjectName("SecondaryButton")
+        self.card_update_button.clicked.connect(self.check_card_library_updates)
+        saved_layout.addWidget(self.card_update_button)
         layout.addWidget(saved_bar)
 
         category_bar = QFrame()
@@ -316,6 +369,31 @@ class DeckWorkspacePage(QWidget):
             self.cost_buttons.append(button)
         cost_row.addStretch()
         filters.addLayout(cost_row)
+        metadata_row = QHBoxLayout()
+        metadata_row.addWidget(QLabel("卡包"))
+        self.card_set_combo = QComboBox()
+        self.card_set_combo.setMinimumWidth(170)
+        self.card_set_combo.currentIndexChanged.connect(
+            lambda _index: self._set_card_set_filter(
+                str(self.card_set_combo.currentData() or "全部")
+            )
+        )
+        metadata_row.addWidget(self.card_set_combo)
+        metadata_row.addWidget(QLabel("稀有度"))
+        self.rarity_combo = QComboBox()
+        self.rarity_combo.setMinimumWidth(110)
+        self.rarity_combo.currentIndexChanged.connect(
+            lambda _index: self._set_rarity_filter(
+                str(self.rarity_combo.currentData() or "全部")
+            )
+        )
+        metadata_row.addWidget(self.rarity_combo)
+        metadata_row.addStretch()
+        self.card_update_status = QLabel("更新检查仅在手动点击时联网")
+        self.card_update_status.setObjectName("SubtleText")
+        metadata_row.addWidget(self.card_update_status)
+        filters.addLayout(metadata_row)
+        self._populate_metadata_filters()
         search_row = QHBoxLayout()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索卡牌名称或 ID...")
@@ -484,13 +562,30 @@ class DeckWorkspacePage(QWidget):
         import_panel.setObjectName("SurfacePanel")
         apply_layout = QVBoxLayout(import_panel)
         apply_layout.setContentsMargins(18, 16, 18, 18)
-        import_title = QLabel("导入并应用分享码")
+        import_title = QLabel("导入分享码或游戏二维码")
         import_title.setObjectName("SectionTitle")
         apply_layout.addWidget(import_title)
         self.share_input = QTextEdit()
-        self.share_input.setPlaceholderText("粘贴分享码，支持当前压缩格式和旧版短码...")
+        self.share_input.setPlaceholderText(
+            "粘贴脚本分享码、官方卡组网址或 2.x.xxxx... 卡组 hash"
+        )
         self.share_input.setMaximumHeight(140)
         apply_layout.addWidget(self.share_input)
+        source_actions = QHBoxLayout()
+        qr_file_button = QPushButton("选择二维码图片")
+        qr_file_button.setObjectName("SecondaryButton")
+        qr_file_button.clicked.connect(self.import_qr_image)
+        clipboard_button = QPushButton("读取剪贴板")
+        clipboard_button.setObjectName("SecondaryButton")
+        clipboard_button.clicked.connect(self.import_qr_clipboard)
+        device_button = QPushButton("读取游戏画面")
+        device_button.setObjectName("SecondaryButton")
+        device_button.clicked.connect(self.device_qr_requested.emit)
+        source_actions.addWidget(qr_file_button)
+        source_actions.addWidget(clipboard_button)
+        source_actions.addWidget(device_button)
+        source_actions.addStretch()
+        apply_layout.addLayout(source_actions)
         apply_button = QPushButton("解析并应用")
         apply_button.setObjectName("PrimaryButton")
         apply_button.clicked.connect(self.apply_share_code)
@@ -512,13 +607,18 @@ class DeckWorkspacePage(QWidget):
             item.setData(Qt.UserRole + 2, entry.cost)
             item.setData(Qt.UserRole + 3, f"{entry.name} {entry.card_id}".casefold())
             item.setData(Qt.UserRole + 4, entry.source_path)
+            item.setData(Qt.UserRole + 5, entry.card_set_id or "其他")
+            item.setData(Qt.UserRole + 6, entry.rarity_name or "其他")
             item.setToolTip(
-                f"{entry.name}\n职业: {entry.category}\n费用: {entry.cost}\n卡牌 ID: {entry.card_id}"
+                f"{entry.name}\n职业: {entry.category}\n费用: {entry.cost}\n"
+                f"卡包: {entry.card_set_name or '其他'}\n"
+                f"稀有度: {entry.rarity_name or '其他'}\n卡牌 ID: {entry.card_id}"
             )
             self.library_list.addItem(item)
         self.library_list.doItemsLayout()
         self._library_populated = True
         self.catalog_status.setText(f"资源库 {len(self.catalog)} 张卡牌")
+        self._populate_metadata_filters()
         self._apply_library_filters()
         self._schedule_visible_icon_load()
 
@@ -573,6 +673,153 @@ class DeckWorkspacePage(QWidget):
         self._refresh_current_list()
         self._log(f"[卡组] 卡牌资源库已刷新，共 {len(self.catalog)} 张")
 
+    def _populate_metadata_filters(self) -> None:
+        if not hasattr(self, "card_set_combo") or not hasattr(self, "rarity_combo"):
+            return
+        current_set = self._card_set_filter
+        current_rarity = self._rarity_filter
+        sets = {}
+        for entry in self.catalog:
+            key = str(entry.card_set_id or "其他")
+            sets[key] = str(entry.card_set_name or "其他")
+        self.card_set_combo.blockSignals(True)
+        self.card_set_combo.clear()
+        self.card_set_combo.addItem("全部卡包", "全部")
+        for set_id, set_name in sorted(
+            sets.items(),
+            key=lambda item: (
+                item[0] == "其他",
+                int(item[0]) if item[0].isdigit() else 999999,
+                item[1],
+            ),
+        ):
+            self.card_set_combo.addItem(set_name, set_id)
+        index = self.card_set_combo.findData(current_set)
+        self.card_set_combo.setCurrentIndex(max(0, index))
+        self.card_set_combo.blockSignals(False)
+
+        rarities = {
+            str(entry.rarity_name or "其他")
+            for entry in self.catalog
+        }
+        rarity_order = {"青铜": 1, "白银": 2, "黄金": 3, "传说": 4, "其他": 99}
+        self.rarity_combo.blockSignals(True)
+        self.rarity_combo.clear()
+        self.rarity_combo.addItem("全部稀有度", "全部")
+        for rarity in sorted(rarities, key=lambda value: (rarity_order.get(value, 98), value)):
+            self.rarity_combo.addItem(rarity, rarity)
+        index = self.rarity_combo.findData(current_rarity)
+        self.rarity_combo.setCurrentIndex(max(0, index))
+        self.rarity_combo.blockSignals(False)
+
+    def check_card_library_updates(self) -> None:
+        if self._is_running():
+            QMessageBox.warning(self, "运行中", "请先停止脚本后再更新卡牌库。")
+            return
+        if self._update_worker is not None and self._update_worker.isRunning():
+            return
+        self._start_card_update_worker(plan=None)
+
+    def card_update_running(self) -> bool:
+        return bool(self._update_worker is not None and self._update_worker.isRunning())
+
+    def request_card_update_stop(self) -> None:
+        if self._update_worker is not None and self._update_worker.isRunning():
+            self._update_worker.requestInterruption()
+
+    def _start_card_update_worker(
+        self,
+        *,
+        plan: Optional[CardLibraryUpdatePlan],
+    ) -> None:
+        self._checked_update_plan = None
+        self._card_update_result = None
+        self._card_update_error = ""
+        self._card_update_operation = "apply" if plan is not None else "check"
+        self.card_update_button.setEnabled(False)
+        self.card_update_status.setText(
+            "正在下载并安装更新..." if plan is not None else "正在读取官方卡牌清单..."
+        )
+        worker = CardLibraryUpdateWorker(
+            resource_root=self.resource_root,
+            plan=plan,
+            parent=self,
+        )
+        worker.progress_signal.connect(self.card_update_status.setText)
+        worker.progress_signal.connect(lambda text: self._log(f"[卡牌库] {text}"))
+        worker.checked_signal.connect(self._store_card_update_plan)
+        worker.applied_signal.connect(self._store_card_update_result)
+        worker.failed_signal.connect(self._store_card_update_error)
+        worker.finished.connect(self._finish_card_update_worker)
+        self._update_worker = worker
+        worker.start()
+
+    def _store_card_update_plan(self, plan: object) -> None:
+        if isinstance(plan, CardLibraryUpdatePlan):
+            self._checked_update_plan = plan
+
+    def _store_card_update_result(self, result: object) -> None:
+        self._card_update_result = dict(result) if isinstance(result, dict) else {}
+
+    def _store_card_update_error(self, message: str) -> None:
+        self._card_update_error = str(message or "卡牌库更新失败")
+
+    def _finish_card_update_worker(self) -> None:
+        worker = self._update_worker
+        operation = self._card_update_operation
+        error = self._card_update_error
+        plan = self._checked_update_plan
+        result = self._card_update_result
+        self._update_worker = None
+        self.card_update_button.setEnabled(True)
+        if worker is not None:
+            worker.deleteLater()
+
+        if error:
+            self.card_update_status.setText("更新检查失败")
+            self._log(f"[卡牌库] {error}")
+            QMessageBox.warning(self, "卡牌库更新失败", error)
+            return
+        if operation == "apply":
+            self.refresh_catalog()
+            downloaded = int((result or {}).get("downloaded", 0) or 0)
+            rows = int((result or {}).get("metadata_rows", 0) or 0)
+            self.card_update_status.setText(f"更新完成：{rows} 条元数据")
+            QMessageBox.information(
+                self,
+                "卡牌库更新完成",
+                f"已安装 {downloaded} 张新增/变更卡图，卡牌字典共 {rows} 条。",
+            )
+            return
+        if plan is None:
+            self.card_update_status.setText("未取得官方差异清单")
+            return
+        if not plan.has_updates:
+            self.card_update_status.setText("本地卡牌库已是最新")
+            QMessageBox.information(self, "无需更新", "本地卡牌库已与官方清单一致。")
+            return
+
+        new_set_text = "、".join(name for _set_id, name in plan.new_sets) or "无"
+        message = (
+            f"官方卡牌/异画条目：{plan.remote_card_count}\n"
+            f"本地字典条目：{plan.local_row_count}\n"
+            f"新增卡包：{new_set_text}\n"
+            f"缺失卡图：{len(plan.missing_assets)}\n"
+            f"发生变更的卡图：{len(plan.changed_assets)}\n\n"
+            "是否下载差异并更新本地卡牌字典？"
+        )
+        answer = QMessageBox.question(
+            self,
+            "发现卡牌库更新",
+            message,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer == QMessageBox.Yes:
+            self._start_card_update_worker(plan=plan)
+        else:
+            self.card_update_status.setText("已取消安装，未修改本地卡牌库")
+
     def _set_category_filter(self, value: str) -> None:
         self._category_filter = str(value)
         for button in self.category_buttons:
@@ -583,6 +830,14 @@ class DeckWorkspacePage(QWidget):
         self._cost_filter = str(value)
         for button in self.cost_buttons:
             button.setChecked(button.text() == self._cost_filter)
+        self._apply_library_filters()
+
+    def _set_card_set_filter(self, value: str) -> None:
+        self._card_set_filter = str(value or "全部")
+        self._apply_library_filters()
+
+    def _set_rarity_filter(self, value: str) -> None:
+        self._rarity_filter = str(value or "全部")
         self._apply_library_filters()
 
     def _set_search_filter(self, value: str) -> None:
@@ -596,6 +851,8 @@ class DeckWorkspacePage(QWidget):
             category = str(item.data(Qt.UserRole + 1) or "")
             cost = int(item.data(Qt.UserRole + 2) or 0)
             search_value = str(item.data(Qt.UserRole + 3) or "")
+            card_set_id = str(item.data(Qt.UserRole + 5) or "其他")
+            rarity_name = str(item.data(Qt.UserRole + 6) or "其他")
             category_ok = self._category_filter == "全部" or category == self._category_filter
             if self._cost_filter == "全部":
                 cost_ok = True
@@ -604,7 +861,17 @@ class DeckWorkspacePage(QWidget):
             else:
                 cost_ok = cost == int(self._cost_filter)
             search_ok = not self._search_filter or self._search_filter in search_value
-            hidden = not (category_ok and cost_ok and search_ok)
+            card_set_ok = (
+                self._card_set_filter == "全部"
+                or card_set_id == self._card_set_filter
+            )
+            rarity_ok = (
+                self._rarity_filter == "全部"
+                or rarity_name == self._rarity_filter
+            )
+            hidden = not (
+                category_ok and cost_ok and card_set_ok and rarity_ok and search_ok
+            )
             item.setHidden(hidden)
             if not hidden:
                 visible += 1
@@ -1008,9 +1275,10 @@ class DeckWorkspacePage(QWidget):
             return False
         try:
             if self.workspace_deck_file:
-                self.strategy_config = self._read_saved_strategy(
+                loaded_strategy = self._read_saved_strategy(
                     self.workspace_deck_file
                 )
+                self.strategy_config = loaded_strategy or _empty_strategy_config()
             elif self._workspace_is_applied:
                 self.strategy_config = self._current_config_strategy(
                     require_valid=True
@@ -1381,6 +1649,55 @@ class DeckWorkspacePage(QWidget):
         QApplication.clipboard().setText(text)
         self._log("[分享] 分享码已复制到剪贴板")
 
+    def import_qr_image(self) -> None:
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "选择游戏生成的卡组二维码",
+            "",
+            "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp);;所有文件 (*)",
+        )
+        if not path:
+            return
+        try:
+            payload = decode_qr_path(path)
+            self._load_qr_payload(payload, source_label=os.path.basename(path))
+        except Exception as exc:
+            QMessageBox.warning(self, "二维码读取失败", str(exc))
+
+    def import_qr_clipboard(self) -> None:
+        clipboard = QApplication.clipboard()
+        mime = clipboard.mimeData()
+        try:
+            if mime is not None and mime.hasImage():
+                image = clipboard.image()
+                payload = decode_qr_bgr(qimage_to_bgr(image))
+                self._load_qr_payload(payload, source_label="剪贴板图片")
+                return
+            text = clipboard.text().strip()
+            if not text:
+                raise DeckQrError("剪贴板中没有二维码图片或卡组网址")
+            self._load_qr_payload(text, source_label="剪贴板文本")
+        except Exception as exc:
+            QMessageBox.warning(self, "剪贴板导入失败", str(exc))
+
+    def import_qr_qimage(self, image: object) -> None:
+        """由主窗口的设备截图线程回传游戏画面。"""
+
+        try:
+            payload = decode_qr_bgr(qimage_to_bgr(image))
+            self._load_qr_payload(payload, source_label="当前游戏画面")
+        except Exception as exc:
+            QMessageBox.warning(self, "游戏二维码读取失败", str(exc))
+
+    def _load_qr_payload(self, payload: str, *, source_label: str) -> None:
+        parsed = parse_official_deck_payload(payload, require_full_deck=True)
+        self.share_input.setPlainText(parsed.source or str(payload or ""))
+        self._log(
+            f"[二维码] 已从{source_label}读取官方构筑："
+            f"{len(parsed.card_ids)} 张、{len(parsed.records)} 种"
+        )
+        self.apply_share_code()
+
     def apply_share_code(self) -> None:
         if self._is_running():
             QMessageBox.warning(self, "运行中", "请先停止脚本后再应用分享码。")
@@ -1389,6 +1706,7 @@ class DeckWorkspacePage(QWidget):
         if not text:
             QMessageBox.warning(self, "分享码为空", "请输入有效的分享码。")
             return
+        legacy_error: Optional[Exception] = None
         try:
             compact = re.sub(r"\s+", "", text)
             compressed = base64.b64decode(compact.encode("ascii"), validate=True)
@@ -1408,19 +1726,53 @@ class DeckWorkspacePage(QWidget):
                     cards=list(data.get("cards") or []),
                 )
             self.strategy_config = strategy_config if isinstance(strategy_config, dict) else {}
-        except Exception:
-            entries = self._entries_from_short_code(text)
-            counts = {entry.key: 1 for entry in entries}
-            derived_entries = []
-            self.strategy_config = {}
+        except Exception as exc:
+            legacy_error = exc
+            try:
+                parsed = parse_official_deck_payload(text, require_full_deck=True)
+                entries, counts, missing = self._entries_from_references(parsed.records)
+                if missing:
+                    raise DeckQrError(
+                        "本地卡牌库缺少二维码中的卡牌: " + ", ".join(missing[:8])
+                    )
+                derived_entries = []
+                self.strategy_config = {}
+            except Exception as qr_exc:
+                self._log(f"[分享] 压缩分享码解析失败: {legacy_error}")
+                QMessageBox.warning(self, "解析失败", str(qr_exc))
+                return
         if not entries:
             QMessageBox.warning(self, "解析失败", "分享码中没有可用卡牌。")
             return
         self.workspace_deck_file = None
         self._workspace_is_applied = False
-        self.deck_name_input.setText(f"分享卡组_{time.strftime('%Y%m%d_%H%M%S')}")
+        prefix = "二维码卡组" if legacy_error is not None else "分享卡组"
+        self.deck_name_input.setText(f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}")
         self._set_selected_entries(entries, counts)
         self._set_derived_entries(derived_entries)
+        if legacy_error is not None:
+            try:
+                self.strategy_config = _empty_strategy_config()
+                path = save_deck_snapshot(
+                    deck_name=self.deck_name_input.text().strip(),
+                    cards=self._deck_card_records(),
+                    derived_cards=[],
+                    decks_dir=os.path.join(get_app_root(), "saved_decks"),
+                    config_path=get_config_path(),
+                    # 官方二维码只有构筑，不含自动出牌策略；禁止继承上一副卡组。
+                    strategy_config=self.strategy_config,
+                )
+                self.workspace_deck_file = os.path.basename(path)
+                if self.deck_store is not None:
+                    self.deck_store.refresh()
+                self._log(
+                    f"[二维码] 已保存本地构筑 '{self.deck_name_input.text()}'，"
+                    "策略保持为空，等待用户配置"
+                )
+            except Exception as exc:
+                QMessageBox.warning(self, "二维码卡组保存失败", str(exc))
+                self._log(f"[二维码] 保存本地构筑失败: {exc}")
+                return
         if self.apply_current_deck():
             self.tabs.setCurrentIndex(0)
 
@@ -1481,20 +1833,6 @@ class DeckWorkspacePage(QWidget):
             seen.add(entry.key)
             result.append(entry)
         return result, missing
-
-    def _entries_from_short_code(self, text: str) -> List[CardEntry]:
-        parts = text.split(".")
-        if len(parts) < 3:
-            return []
-        wanted = {str(_decode_shortcode(part)) for part in parts[2:] if _decode_shortcode(part) > 0}
-        result: List[CardEntry] = []
-        seen = set()
-        for entry in self.catalog:
-            base_id = entry.card_id.split("@", 1)[0]
-            if base_id in wanted and base_id not in seen:
-                result.append(entry)
-                seen.add(base_id)
-        return result
 
     def _read_saved_strategy(self, filename: str) -> Dict[str, Any]:
         path = os.path.join(

@@ -33,6 +33,7 @@ wheels/
 *.spec
 
 # 单元测试/覆盖率报告
+tests/
 htmlcov/
 .tox/
 .coverage
@@ -109,6 +110,7 @@ Thumbs.db
 *.doc
 *.pdf
 *.txt
+!models/maa_ocr/*/keys.txt
 
 # 配置文件（可选，根据项目需要）
 config.json

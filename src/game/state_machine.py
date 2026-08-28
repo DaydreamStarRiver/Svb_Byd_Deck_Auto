@@ -62,16 +62,90 @@ class GameStateMachine:
         # 检查其他按钮
         templates = game_manager.template_manager.templates
 
-        for key, template_info in templates.items():
-            if not template_info:
-                continue
-
-            max_loc, max_val = game_manager.template_manager.match_template(
-                gray_screenshot, template_info
+        def _template_hit(template_key: str):
+            info = templates.get(template_key)
+            if not info:
+                return False, None, 0.0
+            location, score = game_manager.template_manager.match_template(
+                gray_screenshot,
+                info,
             )
+            return (
+                location is not None and score >= float(info["threshold"]),
+                location,
+                score,
+            )
+
+        # 真实结算页同时保留“对战”按钮。先联合判断结算结果，避免
+        # war 分支先开启下一场后丢失上一场胜负。
+        war_hit, _, _ = _template_hit("war")
+        if war_hit and getattr(device_state, "in_match", False):
+            settlement_result = None
+            for settlement_key, result_value in (("win", "win"), ("result", "loss")):
+                hit, _, _ = _template_hit(settlement_key)
+                if not hit:
+                    text_loc, text_score = game_manager.template_manager.match_text_key(
+                        screenshot_cv,
+                        settlement_key,
+                    )
+                    info = templates.get(settlement_key)
+                    hit = bool(
+                        text_loc is not None
+                        and info is not None
+                        and text_score >= float(info["threshold"])
+                    )
+                if hit:
+                    settlement_result = result_value
+                    break
+            if settlement_result is not None:
+                was_recordable = getattr(device_state, "match_start_time", None) is not None
+                device_state.end_current_match(result=settlement_result)
+                if was_recordable:
+                    game_manager.deck_rotation.record_completed_match(settlement_result)
+
+        # 页面文字只在所有常规模板均未命中时作为最后一个候选。
+        template_candidates = list(templates.items()) + [
+            ("__page_text_fallback__", None)
+        ]
+
+        for key, template_info in template_candidates:
+            if key == "__page_text_fallback__":
+                fallback = game_manager.template_manager.find_page_text_match(
+                    screenshot_cv
+                )
+                if fallback is None:
+                    continue
+                key, max_loc, max_val = fallback
+                template_info = templates.get(key)
+                if not template_info:
+                    continue
+            else:
+                if not template_info:
+                    continue
+                if key in {"win", "result"}:
+                    # 结算模板只在 war 同帧命中时检测，避免战斗中每帧执行多尺度匹配。
+                    continue
+                max_loc, max_val = game_manager.template_manager.match_template(
+                    gray_screenshot, template_info
+                )
             if max_val >= template_info["threshold"] and max_loc is not None:
+                matched_w = int(template_info.get("matched_w", template_info["w"]))
+                matched_h = int(template_info.get("matched_h", template_info["h"]))
+
                 # 记录阶段（仅在阶段变化时刷新“无新阶段”计时）。
                 device_state.record_stage_detection(key)
+
+                if key in {"end_round", "enemy_round"} and getattr(
+                    device_state, "in_match", False
+                ) and bool(getattr(game_manager.recognition, "uses_maa", False)):
+                    try:
+                        game_manager.observe_battle_state(screenshot)
+                    except Exception as exc:
+                        device_state.logger.debug("战斗数值识别失败，继续原流程: %s", exc)
+
+                # WIN/RESULT 是结算标识，不是可点击按钮。
+                if key in {"win", "result"}:
+                    continue
 
                 # 命中明显局外页面时，结束当前对战统计。
                 if key in out_of_match_keys and getattr(device_state, "in_match", False):
@@ -83,8 +157,15 @@ class GameStateMachine:
                     and key in out_of_match_keys
                     and not getattr(device_state, "in_match", False)
                 ):
-                    device_state.logger.info("达到脚本总时长上限，当前对战结束后停止脚本")
-                    device_state.request_stop(reason="runtime_limit")
+                    stop_reason = str(
+                        getattr(device_state, "stop_after_match_reason", "")
+                        or "runtime_limit"
+                    )
+                    if stop_reason == "target_wins":
+                        device_state.logger.info("目标胜场已达成，停止脚本且不再开始下一局")
+                    else:
+                        device_state.logger.info("达到脚本总时长上限，当前对战结束后停止脚本")
+                    device_state.request_stop(reason=stop_reason)
                     break
 
                 if key in skip_buttons:
@@ -115,15 +196,40 @@ class GameStateMachine:
 
                 # 处理对战开始/结束逻辑
                 if key == "war":
+                    # 达到停止条件后，结算页仍可能保留“对战”按钮。这里再做
+                    # 一次硬门禁，避免模板遍历顺序变化时误开下一局。
+                    if (
+                        getattr(device_state, "stop_after_current_match", False)
+                        and not getattr(device_state, "in_match", False)
+                    ):
+                        stop_reason = str(
+                            getattr(device_state, "stop_after_match_reason", "")
+                            or "runtime_limit"
+                        )
+                        if stop_reason == "target_wins":
+                            device_state.logger.info(
+                                "目标胜场已达成，忽略对战按钮并停止脚本"
+                            )
+                        else:
+                            device_state.logger.info(
+                                "达到脚本总时长上限，忽略对战按钮并停止脚本"
+                            )
+                        device_state.request_stop(reason=stop_reason)
+                        break
+
                     # 检测到"决斗"按钮，表示新对战开始
                     device_state.logger.debug(
                         f"检测到决斗按钮 - 当前in_match: {device_state.in_match}"
                     )
+                    if game_manager.deck_rotation.has_pending:
+                        if not game_manager.deck_rotation.perform_pending():
+                            break
+
                     # war命中即视为新对战入口，重复触发由start_new_match内部防抖。
                     device_state.start_new_match()
                     # 计算中心点并点击
-                    center_x = max_loc[0] + template_info["w"] // 2
-                    center_y = max_loc[1] + template_info["h"] // 2
+                    center_x = max_loc[0] + matched_w // 2
+                    center_y = max_loc[1] + matched_h // 2
                     u2_device.click(
                         center_x + random.randint(-2, 2),
                         center_y + random.randint(-2, 2),
@@ -132,7 +238,9 @@ class GameStateMachine:
                     device_state.logger.debug(
                         f"调用start_new_match后 - in_match: {device_state.in_match}"
                     )
-                    continue
+                    # 同一张结算截图上还会存在其他局外模板；本帧到此结束，
+                    # 避免刚开启的新局被后续模板立即记为“未判定”。
+                    break
 
                 # 处理庆典模式按钮
                 if key in {"gala_war", "gala_Ok", "gala_index", "gala_BackPark"}:
@@ -141,8 +249,8 @@ class GameStateMachine:
                         f"检测到庆典模式按钮: {template_info['name']}"
                     )
                     # 计算中心点并点击
-                    center_x = max_loc[0] + template_info["w"] // 2
-                    center_y = max_loc[1] + template_info["h"] // 2
+                    center_x = max_loc[0] + matched_w // 2
+                    center_y = max_loc[1] + matched_h // 2
                     u2_device.click(
                         center_x + random.randint(-2, 2),
                         center_y + random.randint(-2, 2),
@@ -180,8 +288,8 @@ class GameStateMachine:
                         device_state.logger.info("本局换牌已执行，跳过重复换牌")
 
                     device_state.sleep(0.5)
-                    center_x = max_loc[0] + template_info["w"] // 2
-                    center_y = max_loc[1] + template_info["h"] // 2
+                    center_x = max_loc[0] + matched_w // 2
+                    center_y = max_loc[1] + matched_h // 2
                     u2_device.click(
                         center_x + random.randint(-2, 2),
                         center_y + random.randint(-2, 2),
@@ -242,8 +350,8 @@ class GameStateMachine:
                     device_state.has_clicked_plus_this_round = False
 
                     # 自动点击结束回合按钮
-                    center_x = max_loc[0] + template_info["w"] // 2
-                    center_y = max_loc[1] + template_info["h"] // 2
+                    center_x = max_loc[0] + matched_w // 2
+                    center_y = max_loc[1] + matched_h // 2
                     u2_device.click(
                         center_x + random.randint(-2, 2),
                         center_y + random.randint(-2, 2),
@@ -258,8 +366,8 @@ class GameStateMachine:
                     break
 
                 # 计算中心点并点击（除了结束回合按钮）
-                center_x = max_loc[0] + template_info["w"] // 2
-                center_y = max_loc[1] + template_info["h"] // 2
+                center_x = max_loc[0] + matched_w // 2
+                center_y = max_loc[1] + matched_h // 2
                 u2_device.click(
                     center_x + random.randint(-2, 2),
                     center_y + random.randint(-2, 2),

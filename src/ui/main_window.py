@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import sys
 import time
@@ -39,6 +40,8 @@ from src.ui.pages.card_priority_page import CardPriorityPage
 from src.ui.pages.config_page import ConfigPage
 from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.deck_workspace_page import DeckWorkspacePage
+from src.ui.pages.deck_rotation_page import DeckRotationPage
+from src.ui.pages.deck_center_page import DeckCenterPage
 from src.ui.pages.logs_page import LogsPage
 from src.ui.pages.statistics_page import StatisticsPage
 from src.ui.theme import apply_theme
@@ -176,6 +179,7 @@ class ShadowverseUI(QMainWindow):
         self._log_queue = log_queue
         self._device_check_thread: Optional[DeviceConnectionChecker] = None
         self._screenshot_thread: Optional[ScreenshotWorker] = None
+        self._screenshot_purpose = "preview"
         self.script_thread: Optional[ScriptRunner] = None
         self._device_config: Optional[Dict[str, Any]] = None
         self._start_after_connect = False
@@ -233,10 +237,20 @@ class ShadowverseUI(QMainWindow):
         self.dashboard_page = DashboardPage(self)
         self.deck_workspace_page = DeckWorkspacePage(self)
         self.card_priority_page = CardPriorityPage(self)
+        self.deck_rotation_page = DeckRotationPage(self)
+        self.deck_center_page = DeckCenterPage(
+            workspace_page=self.deck_workspace_page,
+            priority_page=self.card_priority_page,
+            rotation_page=self.deck_rotation_page,
+            parent=self,
+        )
         self.statistics_page = StatisticsPage(self)
         self.config_page = ConfigPage(self)
         self.logs_page = LogsPage(self)
         self.config_page.config_saved.connect(self._on_config_saved)
+        self.deck_rotation_page.config_saved.connect(
+            lambda _config: self._load_config_into_dashboard()
+        )
 
         # 为现有卡牌与效果编辑器保留兼容别名。
         self.card_select_page = self.deck_workspace_page
@@ -245,13 +259,15 @@ class ShadowverseUI(QMainWindow):
 
         self.pages: Dict[str, QWidget] = {
             "dashboard": self.dashboard_page,
-            "deck": self.deck_workspace_page,
-            "cards": self.card_priority_page,
+            "deck_center": self.deck_center_page,
+            "deck": self.deck_center_page,
+            "cards": self.deck_center_page,
+            "rotation": self.deck_center_page,
             "stats": self.statistics_page,
             "settings": self.config_page,
             "logs": self.logs_page,
         }
-        for key in ("dashboard", "deck", "cards", "stats", "settings", "logs"):
+        for key in ("dashboard", "deck_center", "stats", "settings", "logs"):
             self.stacked_widget.addWidget(self.pages[key])
         self.stacked_widget.currentChanged.connect(self._sync_sidebar_selection)
 
@@ -265,6 +281,9 @@ class ShadowverseUI(QMainWindow):
         self.dashboard_page.disclaimer_requested.connect(self.show_about_disclaimer)
         self.deck_workspace_page.log_requested.connect(self.append_log)
         self.deck_workspace_page.active_deck_changed.connect(self.state.set_active_deck)
+        self.deck_workspace_page.device_qr_requested.connect(
+            self.capture_deck_qr_from_device
+        )
         self.navigate("dashboard")
 
     def _build_sidebar(self) -> QWidget:
@@ -303,8 +322,7 @@ class ShadowverseUI(QMainWindow):
         self.nav_buttons: Dict[str, QPushButton] = {}
         nav_items = [
             ("dashboard", "仪表盘"),
-            ("deck", "卡组构筑"),
-            ("cards", "卡牌设置"),
+            ("deck_center", "卡组中心"),
             ("stats", "统计数据"),
             ("settings", "参数设置"),
             ("logs", "运行日志"),
@@ -374,16 +392,21 @@ class ShadowverseUI(QMainWindow):
             lambda value: self.statistics_page.set_live_stats(self.state.elapsed_seconds, value)
         )
         self.state.active_deck_changed.connect(self.dashboard_page.set_active_deck)
+        self.state.rotation_status_changed.connect(
+            self.dashboard_page.set_rotation_status
+        )
         self.state.log_added.connect(self.dashboard_page.append_log)
         self.state.log_added.connect(self.logs_page.append_log)
         self.state.set_run_status("disconnected")
 
     def navigate(self, key: str) -> None:
-        page = self.pages.get(str(key or ""))
+        key = str(key or "")
+        page = self.pages.get(key)
         if page is None:
             return
         self.stacked_widget.setCurrentWidget(page)
-        button = self.nav_buttons.get(key)
+        button_key = "deck_center" if key in {"deck", "cards", "rotation"} else key
+        button = self.nav_buttons.get(button_key)
         if button is not None:
             button.setChecked(True)
         if key == "stats":
@@ -392,14 +415,9 @@ class ShadowverseUI(QMainWindow):
                 self.state.elapsed_seconds,
                 self.state.battle_count,
             )
-        elif key == "deck":
-            self.deck_workspace_page.ensure_library_populated()
-            self.deck_workspace_page.refresh_saved_decks()
-        elif key == "cards":
-            try:
-                self.card_priority_page.refresh_card_priority()
-            except Exception:
-                pass
+        elif key in {"deck_center", "deck", "cards", "rotation"}:
+            section = "deck" if key == "deck_center" else key
+            self.deck_center_page.select_section(section)
         elif key == "settings":
             try:
                 self.config_page.refresh_config_display()
@@ -663,6 +681,20 @@ class ShadowverseUI(QMainWindow):
         if not text:
             return
         self.state.append_log(text)
+        marker = "[卡组轮换状态]"
+        if marker in text:
+            raw = text.split(marker, 1)[1].strip()
+            start = raw.find("{")
+            if start >= 0:
+                try:
+                    payload, _end = json.JSONDecoder().raw_decode(raw[start:])
+                    if isinstance(payload, dict):
+                        self.state.set_rotation_status(payload)
+                        summary = payload.get("deck_summary")
+                        if isinstance(summary, dict):
+                            self.state.set_active_deck(summary)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    pass
         if "[对战开始]" in text:
             match = re.search(r"第(\d+)场对战", text)
             if match:
@@ -676,15 +708,33 @@ class ShadowverseUI(QMainWindow):
             return
         if self._screenshot_thread is not None and self._screenshot_thread.isRunning():
             return
+        self._screenshot_purpose = "preview"
         self.append_log("[设备] 正在获取截图预览...")
+        self._screenshot_thread = ScreenshotWorker(serial, self)
+        self._screenshot_thread.finished_signal.connect(self._on_screenshot_ready)
+        self._screenshot_thread.start()
+
+    def capture_deck_qr_from_device(self) -> None:
+        serial = str(self.dashboard_page.connection_values().get("serial") or "")
+        if not serial:
+            QMessageBox.warning(self, "设备未配置", "请先在仪表盘填写设备序列号。")
+            return
+        if self._screenshot_thread is not None and self._screenshot_thread.isRunning():
+            QMessageBox.information(self, "截图进行中", "已有一个设备截图任务正在执行。")
+            return
+        self._screenshot_purpose = "deck_qr"
+        self.append_log("[二维码] 正在读取当前游戏画面...")
         self._screenshot_thread = ScreenshotWorker(serial, self)
         self._screenshot_thread.finished_signal.connect(self._on_screenshot_ready)
         self._screenshot_thread.start()
 
     def _on_screenshot_ready(self, ok: bool, message: str, image: object) -> None:
         self.append_log(f"[设备] {message}")
+        purpose = self._screenshot_purpose
         if self._close_pending:
             pass
+        elif ok and isinstance(image, QImage) and purpose == "deck_qr":
+            self.deck_workspace_page.import_qr_qimage(image)
         elif ok and isinstance(image, QImage):
             dialog = QDialog(self)
             dialog.setWindowTitle("设备截图预览")
@@ -710,6 +760,7 @@ class ShadowverseUI(QMainWindow):
         if self._screenshot_thread is not None:
             self._screenshot_thread.deleteLater()
         self._screenshot_thread = None
+        self._screenshot_purpose = "preview"
 
     def _update_footer_status(self, status: str) -> None:
         labels = {
@@ -735,7 +786,10 @@ class ShadowverseUI(QMainWindow):
             self._device_check_thread,
             self._screenshot_thread,
         )
-        return any(thread is not None and thread.isRunning() for thread in threads)
+        return any(thread is not None and thread.isRunning() for thread in threads) or bool(
+            getattr(self, "deck_workspace_page", None)
+            and self.deck_workspace_page.card_update_running()
+        )
 
     def _retry_pending_close(self) -> None:
         if not self._close_pending:
@@ -769,6 +823,10 @@ class ShadowverseUI(QMainWindow):
             for worker in (self._device_check_thread, self._screenshot_thread):
                 if worker is not None and worker.isRunning():
                     worker.requestInterruption()
+            try:
+                self.deck_workspace_page.request_card_update_stop()
+            except Exception:
+                pass
 
         if self._background_threads_running():
             self.setEnabled(False)

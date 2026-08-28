@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
 
 from PyQt5.QtCore import QRectF, Qt, pyqtSignal
@@ -376,6 +377,19 @@ class DashboardPage(QWidget):
         self.deck_count_label.setObjectName("SubtleText")
         deck.addWidget(self.deck_name_label)
         deck.addWidget(self.deck_count_label)
+        rotation_header = QHBoxLayout()
+        rotation_title = QLabel("自动轮换")
+        rotation_title.setObjectName("SubtleText")
+        self.rotation_state_label = QLabel("未启用")
+        self.rotation_state_label.setObjectName("SubtleText")
+        rotation_header.addWidget(rotation_title)
+        rotation_header.addStretch(1)
+        rotation_header.addWidget(self.rotation_state_label)
+        deck.addLayout(rotation_header)
+        self.rotation_progress_label = QLabel("启用后显示当前、下一卡组和剩余局数")
+        self.rotation_progress_label.setObjectName("SubtleText")
+        self.rotation_progress_label.setWordWrap(True)
+        deck.addWidget(self.rotation_progress_label)
         curve_label = QLabel("费用分布")
         curve_label.setObjectName("SubtleText")
         deck.addWidget(curve_label)
@@ -441,6 +455,29 @@ class DashboardPage(QWidget):
         auto_restart = config.get("auto_restart", {}) if isinstance(config, dict) else {}
         self.auto_pass_checkbox.setChecked(bool(game.get("enable_auto_pass", False)))
         self.auto_restart_checkbox.setChecked(bool(auto_restart.get("enabled", True)))
+        rotation = config.get("deck_rotation", {}) if isinstance(config, dict) else {}
+        if not isinstance(rotation, dict):
+            rotation = {}
+        sequence = rotation.get("sequence", [])
+        sequence = sequence if isinstance(sequence, list) else []
+        first_slot = sequence[0] if sequence else None
+        profiles = rotation.get("slot_profiles", {})
+        profiles = profiles if isinstance(profiles, dict) else {}
+        next_file = profiles.get(str(first_slot), "") if first_slot is not None else ""
+        self.set_rotation_status(
+            {
+                "enabled": bool(rotation.get("enabled", False) and sequence),
+                "state": "ready",
+                "current_slot": None,
+                "current_name": "",
+                "next_slot": first_slot,
+                "next_name": os.path.splitext(os.path.basename(str(next_file or "")))[0],
+                "completed": 0,
+                "interval": int(rotation.get("interval_matches", 5) or 5),
+                "remaining": int(rotation.get("interval_matches", 5) or 5),
+                "mode": str(rotation.get("mode", "cycle") or "cycle"),
+            }
+        )
 
     def connection_values(self) -> Dict[str, Any]:
         return {
@@ -550,6 +587,48 @@ class DashboardPage(QWidget):
             f"{count}/{MAX_DECK_SIZE}", "已应用卡牌" if applied else "工作区待应用"
         )
         self.cost_curve.set_costs(data.get("costs") or {})
+
+    def set_rotation_status(self, data: Dict[str, Any]) -> None:
+        enabled = bool(data.get("enabled", False))
+        if not enabled:
+            self.rotation_state_label.setText("未启用")
+            self.rotation_progress_label.setText("启用后显示当前、下一卡组和剩余局数")
+            return
+
+        state = str(data.get("state") or "ready")
+        state_labels = {
+            "ready": "待命",
+            "counting": "计数中",
+            "pending": "等待切换",
+            "switching": "正在切换",
+            "active": "已同步",
+            "recovered": "已恢复",
+            "exhausted": "序列完成",
+            "error": "切换异常",
+        }
+        self.rotation_state_label.setText(state_labels.get(state, state))
+        current_slot = data.get("current_slot")
+        current_name = str(data.get("current_name") or "").strip()
+        next_slot = data.get("next_slot")
+        next_name = str(data.get("next_name") or "").strip()
+        current_text = (
+            f"卡组 {current_slot} · {current_name or '本地构筑'}"
+            if current_slot is not None
+            else (current_name or "尚未完成启动同步")
+        )
+        if bool(data.get("exhausted", False)):
+            next_text = "序列已完成"
+        elif str(data.get("mode") or "") == "random" and next_slot is None:
+            next_text = "随机选择"
+        elif next_slot is not None:
+            next_text = f"卡组 {next_slot} · {next_name or '本地构筑'}"
+        else:
+            next_text = "等待计数"
+        remaining = max(0, int(data.get("remaining") or 0))
+        interval = max(0, int(data.get("interval") or 0))
+        self.rotation_progress_label.setText(
+            f"当前：{current_text}\n下一项：{next_text} · 还需 {remaining}/{interval} 局"
+        )
 
     def append_log(self, message: str) -> None:
         self.log_output.append(str(message or ""))

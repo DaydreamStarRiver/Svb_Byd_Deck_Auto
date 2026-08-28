@@ -26,10 +26,12 @@ from src.utils.hp_detection import (
     sliding_window_detect,
     merge_detections,
     load_mnist_model,
-    recognize_hp_with_fallback,
 )
 from src.utils.mnist_preprocessor import MNISTPreprocessor
 from src.config.paths import get_card_cost_dir
+from src.vision.battle_observer import BattleObserver
+from src.vision.ocr_runtime import BACKEND_LEGACY, RecognitionService, normalize_backend
+from src.game.deck_rotation import DeckRotationController
 from src.config.game_constants import (
     ENEMY_HP_REGION,
     ENEMY_HP_REGION_UP,
@@ -68,8 +70,17 @@ class GameManager:
         self.template_manager = TemplateManager(device_state.device_config)
         self.game_actions = GameActions(device_state)
         self.state_machine: Any = None
+        self.card_template_dir = get_card_cost_dir(ensure=True)
         self._board_sift_templates: dict[str, dict[str, Any]] | None = None
-        self.reader = get_easyocr_reader()
+        recognition_config = device_state.config.get("recognition", {})
+        recognition_backend = normalize_backend(
+            recognition_config.get("backend", BACKEND_LEGACY)
+            if isinstance(recognition_config, dict)
+            else BACKEND_LEGACY
+        )
+        self.reader = (
+            get_easyocr_reader() if recognition_backend == BACKEND_LEGACY else None
+        )
 
         # 加载MNIST模型用于HP识别的后备方案
         self.mnist_session = None
@@ -128,8 +139,46 @@ class GameManager:
         )
         logger.info("HP识别预处理器已初始化")
 
+        self.recognition = RecognitionService(
+            device_state.config,
+            legacy_reader=self.reader,
+        )
+        self.reader = self.recognition.legacy_reader
+        self.template_manager.set_text_recognition(self.recognition)
+        self.battle_observer = BattleObserver(
+            self.recognition,
+            device_state,
+            self,
+        )
+        self.deck_rotation = DeckRotationController(device_state, self)
+        logger.info(
+            "战斗识别方案已就绪: requested=%s active=%s",
+            self.recognition.requested_backend,
+            self.recognition.active_backend,
+        )
+
         # 设置设备状态中的随从管理器
         device_state.follower_manager = self.follower_manager
+
+    def set_runtime_deck_profile(self, profile: Any) -> None:
+        """Commit a preloaded deck recognizer to this device only."""
+
+        template_dir = str(getattr(profile, "template_dir", "") or "")
+        recognizer = getattr(profile, "recognizer", None)
+        if not template_dir or not os.path.isdir(template_dir) or recognizer is None:
+            raise RuntimeError("目标构筑的运行模板尚未准备完成")
+
+        self.card_template_dir = template_dir
+        self.game_actions.hand_manager.sift_recognition = recognizer
+        self.game_actions._last_observed_hand_cards = []
+        self.game_actions._force_post_play_hand_refresh = True
+        self.game_actions._force_post_evolve_hand_refresh = True
+        self._board_sift_templates = None
+
+    def observe_battle_state(self, screenshot, *, force: bool = False):
+        """Update the latest full battle observation from one screenshot."""
+
+        return self.battle_observer.observe(screenshot, force=force)
 
     def scan_enemy_ATK(self, screenshot, debug_flag=False):
         """扫描敌方攻击力数值位置，返回敌方随从位置列表"""
@@ -292,10 +341,9 @@ class GameManager:
                 # 预处理为 28x28 图像。
                 digit_list = self.hp_preprocessor.preprocess(hp_crop_rgba, None)
 
-                # 使用后备链识别生命值：EasyOCR 失败后转用 MNIST。
-                hp_value = recognize_hp_with_fallback(
+                # 使用所选识别方案，失败时逐位转用 MNIST。
+                hp_value = self.recognition.recognize_digit_sequence(
                     digit_list,
-                    self.reader,
                     self.mnist_session
                 )
 
@@ -962,7 +1010,7 @@ class GameManager:
                 """加载单个模板的特征"""
                 if not str(filename or "").lower().endswith(supported_exts):
                     return None
-                template_path = os.path.join(get_card_cost_dir(ensure=True), filename)
+                template_path = os.path.join(self.card_template_dir, filename)
                 if not os.path.exists(template_path):
                     return None
                 tname = os.path.splitext(filename)[0]
@@ -1035,7 +1083,7 @@ class GameManager:
 
             # 加载所有模板（缓存，避免每次扫描重复读取磁盘）
             if getattr(self, "_board_sift_templates", None) is None:
-                template_dir = get_card_cost_dir(ensure=True)
+                template_dir = self.card_template_dir
                 template_files = [
                     f
                     for f in os.listdir(template_dir)

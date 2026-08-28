@@ -12,6 +12,10 @@ from src.config.io_guard import is_in_battle
 
 logger = logging.getLogger(__name__)
 
+# Maa 识别仍处于联调阶段。发布版本暂时隐藏入口，并统一沿用旧版识别；
+# 待识别精度和运行库兼容性验证完成后，只需开启此开关即可恢复入口。
+EXPERIMENTAL_MAA_RECOGNITION_ENABLED = False
+
 # ============================= 免责声明内容 =============================
 # 内容变更时递增版本号，使旧版同意状态失效并重新提示。
 DISCLAIMER_VERSION = 1
@@ -47,6 +51,27 @@ DEFAULT_CONFIG = {
     },
     "run_settings": {
         "max_run_duration": 0,  # 脚本最大运行时长（秒），0表示不限制
+        "target_wins": 0,  # 本次运行达到指定胜场后停止，0表示不限制
+    },
+    "recognition": {
+        # 发布默认继续使用 legacy（EasyOCR + MNIST）。
+        "backend": "legacy",
+        "maa_model_dir": "models/maa_ocr",
+        "maa_threshold": 0.3,
+        "page_text_fallback": True,
+    },
+    "deck_rotation": {
+        "enabled": False,
+        "interval_matches": 5,
+        "sequence": [1, 2, 3],
+        # 九宫格游戏槽位 -> saved_decks 下的本地构筑文件。
+        "slot_profiles": {},
+        # 启动后首次到达可选卡组的结算页时，先同步到序列首项。
+        "switch_on_start": True,
+        # cycle=循环；once=执行一轮；random=从序列中随机选择且避免连续重复。
+        "mode": "cycle",
+        "failure_policy": "pause",
+        "page_timeout_seconds": 8,
     },
     "devices": [
         {

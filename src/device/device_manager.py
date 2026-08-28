@@ -3,6 +3,7 @@
 管理所有设备的连接和运行
 """
 
+import copy
 import threading
 import logging
 import time
@@ -49,7 +50,10 @@ class DeviceManager:
 
             # 创建设备状态
             device_state = DeviceState(
-                serial, self.config_manager.config, device_config, log_queue=self.log_queue
+                serial,
+                copy.deepcopy(self.config_manager.config),
+                device_config,
+                log_queue=self.log_queue,
             )
             self.device_states[serial] = device_state
 
@@ -134,6 +138,13 @@ class DeviceManager:
                 # 重置设备状态以便重新连接
                 device_state.adb_device = None
                 device_state.u2_device = None
+                try:
+                    old_manager = getattr(device_state, "game_manager", None)
+                    old_rotation = getattr(old_manager, "deck_rotation", None)
+                    if old_rotation is not None:
+                        old_rotation.close()
+                except Exception:
+                    pass
                 device_state.game_manager = None
 
                 logger.info(f"等待 {reconnect_delay} 秒后重试...")
@@ -221,7 +232,7 @@ class DeviceManager:
                 # 设置本次运行的对战次数
                 # 检测到已开始的对战，设置为第1场
                 device_state.current_run_matches = 0
-                device_state.in_match = True
+                device_state.start_new_match()
                 device_state.logger.debug("检测到已开始的对战，将作为第1场计算")
             else:
                 device_state.logger.debug("未检测到进行中的对战")
@@ -259,6 +270,7 @@ class DeviceManager:
                 if (time.time() - script_start_time) >= max_run_duration:
                     runtime_limit_pending = True
                     device_state.stop_after_current_match = True
+                    device_state.stop_after_match_reason = "runtime_limit"
                     device_state.logger.warning(
                         f"达到脚本总时长上限({max_run_duration}秒)，将在当前对战结束后停止"
                     )
@@ -354,6 +366,14 @@ class DeviceManager:
 
         # 保存统计数据
         device_state.save_round_statistics()
+
+        try:
+            game_manager = getattr(device_state, "game_manager", None)
+            deck_rotation = getattr(game_manager, "deck_rotation", None)
+            if deck_rotation is not None:
+                deck_rotation.close()
+        except Exception as exc:
+            device_state.logger.debug("清理卡组轮换运行缓存失败: %s", exc)
 
         # 显示运行总结
         summary = device_state.get_run_summary()

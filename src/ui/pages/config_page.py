@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
 
 from src.config.paths import get_config_path
 from src.config.config_repository import ConfigRepository
+from src.config.settings import EXPERIMENTAL_MAA_RECOGNITION_ENABLED
 from src.ui.background import (
     BACKGROUND_OPACITY_DEFAULT,
     BACKGROUND_OPACITY_MAX,
@@ -66,7 +67,7 @@ class ConfigPage(QWidget):
         title_label.setProperty("heading", "page")
         main_layout.addWidget(title_label)
 
-        subtitle_label = QLabel("统一管理操作速度、运行限制、界面背景和换牌策略")
+        subtitle_label = QLabel("统一管理操作速度、停止条件、界面背景和换牌策略")
         subtitle_label.setObjectName("PageSubtitle")
         subtitle_label.setProperty("muted", True)
         main_layout.addWidget(subtitle_label)
@@ -127,6 +128,42 @@ class ConfigPage(QWidget):
         )
         basic_layout.addLayout(basic_form)
         content_layout.addWidget(basic_panel)
+
+        recognition_panel, recognition_layout = self._create_section(
+            "识别设置",
+            "选择旧版 EasyOCR/MNIST 流程，或使用 MaaFramework 识别战斗数值并提供页面文字回退。",
+            "RecognitionSettingsPanel",
+        )
+        recognition_row = QHBoxLayout()
+        recognition_row.setSpacing(12)
+        recognition_label = QLabel("识别方案")
+        recognition_label.setObjectName("SettingsFieldLabel")
+        recognition_row.addWidget(recognition_label)
+
+        self.recognition_combo = QComboBox()
+        self.recognition_combo.setObjectName("RecognitionBackendCombo")
+        self.recognition_combo.addItem("旧版识别（EasyOCR + MNIST）", "legacy")
+        self.recognition_combo.addItem("新版识别（MaaFramework）", "maa")
+        self.recognition_combo.setMinimumWidth(280)
+        recognition_config = self.config_data.get("recognition", {})
+        recognition_backend = "legacy"
+        if EXPERIMENTAL_MAA_RECOGNITION_ENABLED:
+            recognition_backend = str(
+                recognition_config.get("backend", "legacy")
+                if isinstance(recognition_config, dict)
+                else "legacy"
+            ).strip().lower()
+        recognition_index = self.recognition_combo.findData(recognition_backend)
+        self.recognition_combo.setCurrentIndex(max(0, recognition_index))
+        recognition_row.addWidget(self.recognition_combo)
+        recognition_hint = QLabel("设置在下次启动脚本时生效；MAA 初始化失败会自动回退旧版识别。")
+        recognition_hint.setObjectName("SettingsFieldHint")
+        recognition_hint.setProperty("dim", True)
+        recognition_hint.setWordWrap(True)
+        recognition_row.addWidget(recognition_hint, 1)
+        recognition_layout.addLayout(recognition_row)
+        recognition_panel.setVisible(EXPERIMENTAL_MAA_RECOGNITION_ENABLED)
+        content_layout.addWidget(recognition_panel)
 
         self._load_background_values()
         appearance_panel, appearance_layout = self._create_section(
@@ -231,6 +268,10 @@ class ConfigPage(QWidget):
             str(self.max_run_duration_minutes), "RuntimeLimitInput"
         )
         self.runtime_limit_input.setValidator(QIntValidator(0, 10080, self))
+        self.target_wins_input = self._create_line_edit(
+            str(self.target_wins), "TargetWinsInput"
+        )
+        self.target_wins_input.setValidator(QIntValidator(0, 9999, self))
 
         self._add_form_row(
             run_form,
@@ -255,6 +296,14 @@ class ConfigPage(QWidget):
             self.runtime_limit_input,
             "分钟",
             "0 表示不限制；达到上限后会等待当前对战结束再停止。",
+        )
+        self._add_form_row(
+            run_form,
+            6,
+            "目标胜利场数",
+            self.target_wins_input,
+            "胜",
+            "0 表示不限制；胜场达标后停在当前结算页，不再开始下一局。",
         )
         run_layout.addLayout(run_form)
         content_layout.addWidget(run_panel)
@@ -327,7 +376,11 @@ class ConfigPage(QWidget):
         self.on_restart_enabled_changed()
 
         self.setTabOrder(self.min_drag_input, self.max_drag_input)
-        self.setTabOrder(self.max_drag_input, self.background_enabled_checkbox)
+        if EXPERIMENTAL_MAA_RECOGNITION_ENABLED:
+            self.setTabOrder(self.max_drag_input, self.recognition_combo)
+            self.setTabOrder(self.recognition_combo, self.background_enabled_checkbox)
+        else:
+            self.setTabOrder(self.max_drag_input, self.background_enabled_checkbox)
         self.setTabOrder(self.background_enabled_checkbox, self.background_browse_btn)
         self.setTabOrder(self.background_browse_btn, self.background_clear_btn)
         self.setTabOrder(self.background_clear_btn, self.background_opacity_slider)
@@ -365,12 +418,21 @@ class ConfigPage(QWidget):
             self.max_restarts = 3
 
         run_settings = self.config_data.get("run_settings", {})
+        if not isinstance(run_settings, dict):
+            run_settings = {}
         try:
             self.max_run_duration_minutes = int(
                 run_settings.get("max_run_duration", 0) or 0
             ) // 60
         except (TypeError, ValueError):
             self.max_run_duration_minutes = 0
+        try:
+            self.target_wins = max(
+                0,
+                int(run_settings.get("target_wins", 0) or 0),
+            )
+        except (TypeError, ValueError):
+            self.target_wins = 0
 
     def _load_background_values(self) -> None:
         ui_config = self.config_data.get("ui", {})
@@ -646,16 +708,33 @@ class ConfigPage(QWidget):
             if "run_settings" not in self.config_data:
                 self.config_data["run_settings"] = {}
             self.config_data["run_settings"]["max_run_duration"] = runtime_limit * 60
+            target_wins = int(self.target_wins_input.text())
+            if target_wins < 0 or target_wins > 9999:
+                raise ValueError("目标胜利场数必须在0-9999之间")
+            self.config_data["run_settings"]["target_wins"] = target_wins
             self.config_data["run_settings"].pop("max_battle_count", None)
             self.config_data["run_settings"].pop("force_close", None)
         except Exception as e:
-            QMessageBox.warning(self, "输入错误", f"脚本总时长设置错误: {str(e)}")
+            QMessageBox.warning(self, "输入错误", f"运行停止条件设置错误: {str(e)}")
             return
 
         strategy = self.strategy_combo.currentText()
         if "game" not in self.config_data:
             self.config_data["game"] = {}
         self.config_data["game"]["card_replacement_strategy"] = strategy
+
+        recognition_config = self.config_data.get("recognition")
+        if not isinstance(recognition_config, dict):
+            recognition_config = {}
+            self.config_data["recognition"] = recognition_config
+        recognition_config["backend"] = (
+            str(self.recognition_combo.currentData() or "legacy")
+            if EXPERIMENTAL_MAA_RECOGNITION_ENABLED
+            else "legacy"
+        )
+        recognition_config.setdefault("maa_model_dir", "models/maa_ocr")
+        recognition_config.setdefault("maa_threshold", 0.3)
+        recognition_config.setdefault("page_text_fallback", True)
 
         try:
             if "ui" not in self.config_data or not isinstance(self.config_data["ui"], dict):
@@ -700,6 +779,7 @@ class ConfigPage(QWidget):
         self.restart_time_input.setText(str(self.stage_timeout))
         self.restart_count_input.setText(str(self.max_restarts))
         self.runtime_limit_input.setText(str(self.max_run_duration_minutes))
+        self.target_wins_input.setText(str(self.target_wins))
         self.on_restart_enabled_changed()
 
         self._load_background_values()
@@ -711,4 +791,15 @@ class ConfigPage(QWidget):
         index = self.strategy_combo.findText(current_strategy)
         if index >= 0:
             self.strategy_combo.setCurrentIndex(index)
+
+        recognition_config = self.config_data.get("recognition", {})
+        recognition_backend = "legacy"
+        if EXPERIMENTAL_MAA_RECOGNITION_ENABLED:
+            recognition_backend = str(
+                recognition_config.get("backend", "legacy")
+                if isinstance(recognition_config, dict)
+                else "legacy"
+            ).strip().lower()
+        recognition_index = self.recognition_combo.findData(recognition_backend)
+        self.recognition_combo.setCurrentIndex(max(0, recognition_index))
         return

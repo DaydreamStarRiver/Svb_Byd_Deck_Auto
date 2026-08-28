@@ -15,6 +15,7 @@ class AppState(QObject):
     elapsed_changed = pyqtSignal(int)
     battle_count_changed = pyqtSignal(int)
     active_deck_changed = pyqtSignal(dict)
+    rotation_status_changed = pyqtSignal(dict)
     log_added = pyqtSignal(str)
 
     def __init__(self, parent: QObject | None = None):
@@ -37,6 +38,17 @@ class AppState(QObject):
             "costs": {},
             "file": None,
             "applied": True,
+        }
+        self.rotation_status: Dict[str, Any] = {
+            "enabled": False,
+            "state": "disabled",
+            "current_slot": None,
+            "current_name": "",
+            "next_slot": None,
+            "next_name": "",
+            "completed": 0,
+            "interval": 0,
+            "remaining": 0,
         }
         self.logs: List[str] = []
 
@@ -65,6 +77,11 @@ class AppState(QObject):
         if isinstance(data, dict):
             self.active_deck.update(data)
         self.active_deck_changed.emit(dict(self.active_deck))
+
+    def set_rotation_status(self, data: Dict[str, Any]) -> None:
+        if isinstance(data, dict):
+            self.rotation_status.update(data)
+        self.rotation_status_changed.emit(dict(self.rotation_status))
 
     def append_log(self, message: Any) -> None:
         text = str(message or "")

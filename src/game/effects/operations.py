@@ -143,7 +143,13 @@ class OperationExecutor:
         if u2_device is None:
             return False
 
-        recognizer = SiftCardRecognition(get_card_cost_dir(ensure=True))
+        recognizer = None
+        try:
+            recognizer = ds.game_manager.game_actions.hand_manager.sift_recognition
+        except Exception:
+            recognizer = None
+        if recognizer is None:
+            recognizer = SiftCardRecognition(get_card_cost_dir(ensure=True))
         retries = max(1, _safe_int(max_retries, 2))
         hand_area = (250, 120, 1050, 650)
         cards: List[Any] = []

@@ -6,6 +6,8 @@
 import os
 import sys
 
+from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
+
 # 获取项目根目录
 try:
     project_root = os.path.abspath(os.path.dirname(__file__))
@@ -37,6 +39,11 @@ for rel_path in model_files:
     src = os.path.join(project_root, rel_path)
     if os.path.exists(src):
         datas.append((src, os.path.dirname(rel_path)))
+
+# Maa 入口暂时隐藏，但保留完整运行资源，方便后续只开启功能开关即可联调。
+maa_model_dir = os.path.join(project_root, 'models', 'maa_ocr')
+if os.path.isdir(maa_model_dir):
+    datas.append((maa_model_dir, os.path.join('models', 'maa_ocr')))
 
 # 包含内部遮罩资源；源码未提供专用副本时，从现有模板目录选取回退文件。
 hp_mask_candidates = [
@@ -104,12 +111,23 @@ hiddenimports = [
     'easyocr',
     'torch',
     'torchvision',
+    'cv2',
+    'requests',
+    'PIL.Image',
     'src.utils.card_swap_strategy_enhanced',
     'src.config.card_priorities',
 ]
 
-binaries = []
+try:
+    hiddenimports.extend(collect_submodules('maa'))
+    binaries = collect_dynamic_libs('maa')
+except Exception as exc:
+    print("警告: 无法收集 MaaFramework 运行库: {}".format(exc))
+    binaries = []
+
 excludes = [
+    # 旧版 MNIST 使用 OpenCV DNN；这里仅排除 Python onnxruntime，
+    # Maa 自带的 onnxruntime_maa.dll 仍会随 maa/bin 一起收集。
     'onnxruntime',
 ]
 
@@ -186,7 +204,8 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    # Maa 原生依赖保持原文件，避免 UPX 处理后影响 DLL 加载。
+    upx_exclude=['maa/bin/*.dll'],
     name='Svb_Byd_Deck_Auto',
 )
 
@@ -194,6 +213,7 @@ print("打包配置说明:")
 print("1. 使用虚拟环境路径: {}".format(venv_path if os.path.exists(venv_path) else "未找到虚拟环境"))
 print("2. 已排除的配置文件目录: {}".format(", ".join(excluded_dirs)))
 print("3. 包含的核心模型文件: {}".format(", ".join(model_files)))
-print("4. 打包完成后，请确保以下目录与可执行文件在同一目录下:")
+print("4. Maa OCR 模型: {}".format("已包含" if os.path.isdir(maa_model_dir) else "未找到"))
+print("5. 打包完成后，请确保以下目录与可执行文件在同一目录下:")
 for dir_name in excluded_dirs:
     print("   - {}".format(dir_name))

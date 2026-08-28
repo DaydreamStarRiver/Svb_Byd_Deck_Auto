@@ -24,6 +24,10 @@ class MatchRecord:
     duration_seconds: Optional[float]
     run_id: str = ""
     source_file: str = ""
+    result: str = "unknown"
+    deck_slot: Optional[int] = None
+    deck_file: str = ""
+    deck_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,9 @@ class MatchAggregate:
     duration_sample_count: int = 0
     total_rounds: int = 0
     rounds_sample_count: int = 0
+    wins: int = 0
+    losses: int = 0
+    unknown_results: int = 0
 
     @property
     def average_duration_seconds(self) -> float:
@@ -48,11 +55,30 @@ class MatchAggregate:
             return 0.0
         return self.total_rounds / self.rounds_sample_count
 
+    @property
+    def decided_count(self) -> int:
+        return self.wins + self.losses
+
+    @property
+    def win_rate(self) -> float:
+        if self.decided_count <= 0:
+            return 0.0
+        return self.wins / self.decided_count
+
 
 @dataclass(frozen=True)
 class DailyBattleCount:
     day: date
     battle_count: int
+
+
+@dataclass(frozen=True)
+class DeckBattleSummary:
+    deck_key: str
+    deck_name: str
+    deck_file: str
+    slots: Tuple[int, ...]
+    aggregate: MatchAggregate
 
 
 @dataclass(frozen=True)
@@ -67,6 +93,7 @@ class StatisticsSnapshot:
     current_run_id: str
     latest_run_id: str
     daily_counts: Tuple[DailyBattleCount, ...]
+    deck_summaries: Tuple[DeckBattleSummary, ...]
     files_loaded: int
     files_failed: int
 
@@ -190,6 +217,15 @@ def parse_round_count(value: Any) -> Optional[int]:
     return rounds if rounds >= 0 else None
 
 
+def parse_match_result(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"win", "won", "victory", "胜利", "勝利"}:
+        return "win"
+    if text in {"loss", "lose", "lost", "defeat", "失败", "失敗", "败北", "敗北"}:
+        return "loss"
+    return "unknown"
+
+
 def parse_match_record(raw: Any, source_file: str = "") -> Optional[MatchRecord]:
     if not isinstance(raw, dict):
         return None
@@ -200,6 +236,10 @@ def parse_match_record(raw: Any, source_file: str = "") -> Optional[MatchRecord]
     if occurred_at is None:
         return None
 
+    deck_slot = parse_round_count(raw.get("deck_slot"))
+    if deck_slot is not None and not 1 <= deck_slot <= 9:
+        deck_slot = None
+
     return MatchRecord(
         occurred_at=occurred_at,
         rounds=parse_round_count(raw.get("rounds", raw.get("round_count"))),
@@ -208,6 +248,10 @@ def parse_match_record(raw: Any, source_file: str = "") -> Optional[MatchRecord]
         ),
         run_id=str(raw.get("run_id") or "").strip(),
         source_file=source_file,
+        result=parse_match_result(raw.get("result", raw.get("outcome"))),
+        deck_slot=deck_slot,
+        deck_file=str(raw.get("deck_file") or "").strip(),
+        deck_name=str(raw.get("deck_name") or "").strip(),
     )
 
 
@@ -283,6 +327,9 @@ def aggregate_matches(records: Iterable[MatchRecord]) -> MatchAggregate:
     duration_samples = 0
     total_rounds = 0
     rounds_samples = 0
+    wins = 0
+    losses = 0
+    unknown_results = 0
 
     for record in records:
         battle_count += 1
@@ -292,6 +339,12 @@ def aggregate_matches(records: Iterable[MatchRecord]) -> MatchAggregate:
         if record.rounds is not None:
             total_rounds += record.rounds
             rounds_samples += 1
+        if record.result == "win":
+            wins += 1
+        elif record.result == "loss":
+            losses += 1
+        else:
+            unknown_results += 1
 
     return MatchAggregate(
         battle_count=battle_count,
@@ -299,6 +352,9 @@ def aggregate_matches(records: Iterable[MatchRecord]) -> MatchAggregate:
         duration_sample_count=duration_samples,
         total_rounds=total_rounds,
         rounds_sample_count=rounds_samples,
+        wins=wins,
+        losses=losses,
+        unknown_results=unknown_results,
     )
 
 
@@ -355,6 +411,51 @@ def build_statistics_snapshot(
     else:
         latest_records = []
 
+    deck_groups: dict[str, list[MatchRecord]] = {}
+    deck_metadata: dict[str, tuple[str, str, set[int]]] = {}
+    for record in normalized_records:
+        deck_file = str(record.deck_file or "").strip()
+        deck_name = str(record.deck_name or "").strip()
+        if deck_file:
+            deck_key = "file:" + deck_file.casefold()
+        elif deck_name:
+            deck_key = "name:" + deck_name.casefold()
+        else:
+            deck_key = "__unassigned__"
+            deck_name = "历史未标记卡组"
+        deck_groups.setdefault(deck_key, []).append(record)
+        previous_name, previous_file, slots = deck_metadata.get(
+            deck_key,
+            (deck_name, deck_file, set()),
+        )
+        if record.deck_slot is not None:
+            slots.add(int(record.deck_slot))
+        deck_metadata[deck_key] = (
+            previous_name or deck_name,
+            previous_file or deck_file,
+            slots,
+        )
+
+    deck_summaries = []
+    for deck_key, grouped_records in deck_groups.items():
+        deck_name, deck_file, slots = deck_metadata[deck_key]
+        deck_summaries.append(
+            DeckBattleSummary(
+                deck_key=deck_key,
+                deck_name=deck_name or deck_file or "历史未标记卡组",
+                deck_file=deck_file,
+                slots=tuple(sorted(slots)),
+                aggregate=aggregate_matches(grouped_records),
+            )
+        )
+    deck_summaries.sort(
+        key=lambda item: (
+            item.deck_key == "__unassigned__",
+            -item.aggregate.decided_count,
+            item.deck_name.casefold(),
+        )
+    )
+
     return StatisticsSnapshot(
         records=normalized_records,
         overall=aggregate_matches(normalized_records),
@@ -366,6 +467,7 @@ def build_statistics_snapshot(
         current_run_id=selected_run_id,
         latest_run_id=latest_run_id,
         daily_counts=build_daily_counts(normalized_records, days=7, end_day=today),
+        deck_summaries=tuple(deck_summaries),
         files_loaded=max(0, int(files_loaded)),
         files_failed=max(0, int(files_failed)),
     )
