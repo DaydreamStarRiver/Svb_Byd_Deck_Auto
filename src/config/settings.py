@@ -68,7 +68,7 @@ DEFAULT_CONFIG = {
         "slot_profiles": {},
         # 启动后首次到达可选卡组的结算页时，先同步到序列首项。
         "switch_on_start": True,
-        # cycle=循环；once=执行一轮；random=从序列中随机选择且避免连续重复。
+        # cycle=循环；once=执行一轮；random=从完整序列独立随机选择，允许连续重复。
         "mode": "cycle",
         "failure_policy": "pause",
         "page_timeout_seconds": 8,

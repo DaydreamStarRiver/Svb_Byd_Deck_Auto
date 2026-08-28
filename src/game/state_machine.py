@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import random
+import time
 from typing import TYPE_CHECKING, List
 
 import cv2
@@ -18,8 +19,81 @@ if TYPE_CHECKING:
 
 
 class GameStateMachine:
+    UNKNOWN_EXIT_CONFIRM_HITS = 2
+    UNKNOWN_EXIT_CONFIRM_WINDOW_SECONDS = 2.5
+
+    def __init__(self) -> None:
+        self._unknown_exit_key = ""
+        self._unknown_exit_hits = 0
+        self._unknown_exit_last_seen = 0.0
+        self._unknown_exit_location: tuple[int, int] | None = None
+
+    def _reset_unknown_exit_evidence(self) -> None:
+        self._unknown_exit_key = ""
+        self._unknown_exit_hits = 0
+        self._unknown_exit_last_seen = 0.0
+        self._unknown_exit_location = None
+
+    def _confirm_unknown_exit(
+        self,
+        device_state: "DeviceState",
+        *,
+        key: str,
+        score: float,
+        location: object,
+    ) -> bool:
+        """未知胜负离场必须连续命中，过滤回合动画中的单帧误判。"""
+
+        now = time.monotonic()
+        current_location = None
+        if isinstance(location, tuple) and len(location) >= 2:
+            current_location = (int(location[0]), int(location[1]))
+        location_is_stable = bool(
+            current_location is not None
+            and self._unknown_exit_location is not None
+            and abs(current_location[0] - self._unknown_exit_location[0]) <= 24
+            and abs(current_location[1] - self._unknown_exit_location[1]) <= 24
+        )
+        is_consecutive = bool(
+            key == self._unknown_exit_key
+            and location_is_stable
+            and (now - self._unknown_exit_last_seen)
+            <= self.UNKNOWN_EXIT_CONFIRM_WINDOW_SECONDS
+        )
+        if is_consecutive:
+            self._unknown_exit_hits += 1
+        else:
+            self._unknown_exit_key = key
+            self._unknown_exit_hits = 1
+        self._unknown_exit_last_seen = now
+        self._unknown_exit_location = current_location
+
+        if self._unknown_exit_hits < self.UNKNOWN_EXIT_CONFIRM_HITS:
+            device_state.logger.debug(
+                "疑似离开对战[%s]，等待连续确认 (%d/%d, score=%.3f, loc=%s)",
+                key,
+                self._unknown_exit_hits,
+                self.UNKNOWN_EXIT_CONFIRM_HITS,
+                score,
+                location,
+            )
+            return False
+
+        device_state.logger.warning(
+            "连续确认已离开对战[%s]，按未判定结果收口 "
+            "(score=%.3f, loc=%s)",
+            key,
+            score,
+            location,
+        )
+        self._reset_unknown_exit_evidence()
+        return True
+
     def process(self, device_state: "DeviceState", game_manager: "GameManager", skip_buttons: List[str]):
         """处理游戏主循环的一帧。"""
+
+        if not getattr(device_state, "in_match", False):
+            self._reset_unknown_exit_evidence()
 
         out_of_match_keys = {
             "war",
@@ -98,13 +172,27 @@ class GameStateMachine:
                     settlement_result = result_value
                     break
             if settlement_result is not None:
+                self._reset_unknown_exit_evidence()
                 was_recordable = getattr(device_state, "match_start_time", None) is not None
                 device_state.end_current_match(result=settlement_result)
                 if was_recordable:
                     game_manager.deck_rotation.record_completed_match(settlement_result)
 
         # 页面文字只在所有常规模板均未命中时作为最后一个候选。
-        template_candidates = list(templates.items()) + [
+        template_items = list(templates.items())
+        if getattr(device_state, "in_match", False):
+            # 战前抉择、我方回合和敌方回合都是强战斗证据，优先于所有
+            # 局外按钮，避免回合动画中的小模板误匹配抢先结束对战。
+            battle_priority = ("decision", "end_round", "enemy_round")
+            priority_items = [
+                (key, templates[key]) for key in battle_priority if key in templates
+            ]
+            template_items = priority_items + [
+                (key, info)
+                for key, info in template_items
+                if key not in battle_priority
+            ]
+        template_candidates = template_items + [
             ("__page_text_fallback__", None)
         ]
 
@@ -132,6 +220,20 @@ class GameStateMachine:
                 matched_w = int(template_info.get("matched_w", template_info["w"]))
                 matched_h = int(template_info.get("matched_h", template_info["h"]))
 
+                # 普通战斗阶段会立即清除可疑离场证据；局外页面在对战仍
+                # 标记为进行中时必须连续两帧命中，首帧不点击也不改状态。
+                if key not in out_of_match_keys:
+                    self._reset_unknown_exit_evidence()
+                elif getattr(device_state, "in_match", False):
+                    if not self._confirm_unknown_exit(
+                        device_state,
+                        key=key,
+                        score=float(max_val),
+                        location=max_loc,
+                    ):
+                        device_state.sleep(0.2)
+                        break
+
                 # 记录阶段（仅在阶段变化时刷新“无新阶段”计时）。
                 device_state.record_stage_detection(key)
 
@@ -146,6 +248,15 @@ class GameStateMachine:
                 # WIN/RESULT 是结算标识，不是可点击按钮。
                 if key in {"win", "result"}:
                     continue
+
+                # 卡组确认弹窗和选择页模板仅用于确认流程进度，绝不能走
+                # 通用按钮点击逻辑，否则会不断点击“确认牌组/选择牌组”标题。
+                if key in {"deck_confirm_dialog", "deck_selection_page"}:
+                    device_state.logger.debug(
+                        "检测到卡组轮换页面标识[%s]，等待专用流程处理",
+                        key,
+                    )
+                    break
 
                 # 命中明显局外页面时，结束当前对战统计。
                 if key in out_of_match_keys and getattr(device_state, "in_match", False):
@@ -169,7 +280,9 @@ class GameStateMachine:
                     break
 
                 if key in skip_buttons:
-                    continue
+                    # enemy_round 等只读阶段一旦确认，本帧不再扫描后续模板，
+                    # 避免同一画面上的局外模板误判和误点击。
+                    break
                 if key == "LoginPage":
                     u2_device.click(
                         659 + random.randint(-10, 10), 338 + random.randint(-10, 10)
@@ -217,6 +330,18 @@ class GameStateMachine:
                         device_state.request_stop(reason=stop_reason)
                         break
 
+                    # 卡组弹窗是半透明的，可能同时匹配到背景中的“对战”按钮。
+                    # 只要任一卡组流程页面仍可见，就禁止启动下一局。
+                    rotation_page_visible = any(
+                        _template_hit(page_key)[0]
+                        for page_key in ("deck_confirm_dialog", "deck_selection_page")
+                    )
+                    if rotation_page_visible:
+                        device_state.logger.debug(
+                            "卡组轮换页面尚未关闭，忽略背景中的对战按钮"
+                        )
+                        break
+
                     # 检测到"决斗"按钮，表示新对战开始
                     device_state.logger.debug(
                         f"检测到决斗按钮 - 当前in_match: {device_state.in_match}"
@@ -224,6 +349,13 @@ class GameStateMachine:
                     if game_manager.deck_rotation.has_pending:
                         if not game_manager.deck_rotation.perform_pending():
                             break
+                        # perform_pending 内部会经历多个页面；无论成功还是按
+                        # 失败策略恢复，都不得复用本帧轮换前的 war 坐标。
+                        # 下一轮重新截图确认结算页后再开始新对战。
+                        device_state.logger.debug(
+                            "卡组轮换流程结束，等待下一帧重新确认对战入口"
+                        )
+                        break
 
                     # war命中即视为新对战入口，重复触发由start_new_match内部防抖。
                     device_state.start_new_match()

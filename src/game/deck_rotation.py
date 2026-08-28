@@ -321,8 +321,9 @@ class DeckRotationController:
         if not self.sequence:
             return None
         if self.mode == "random":
-            candidates = [slot for slot in self.sequence if slot != self.last_slot]
-            return random.choice(candidates or self.sequence)
+            # 每次切换都对用户设置的完整序列独立抽样。允许连续抽中
+            # 同一卡组；序列中重复添加的槽位自然会获得更高权重。
+            return random.choice(self.sequence)
         if self.mode == "once" and self.sequence_index >= len(self.sequence):
             return None
         return self.sequence[self.sequence_index % len(self.sequence)]
@@ -379,14 +380,33 @@ class DeckRotationController:
         return False
 
     def _wait_result_page(self) -> bool:
+        """等待卡组弹窗完全关闭，并确认已经稳定回到结算页。
+
+        卡组弹窗使用半透明背景，弹窗仍存在时也可能匹配到后方结算页的
+        war/win/result。必须先排除两个卡组页面标识，再连续确认结算页，
+        否则状态机会复用旧截图过早点击“对战”。
+        """
+
         deadline = time.monotonic() + self.timeout
+        stable_frames = 0
         while time.monotonic() < deadline:
             self.device_state.check_interrupt()
             bgr, gray = self._capture()
-            if bgr is not None and gray is not None and any(
-                self._matches(key, bgr, gray) for key in ("war", "win", "result")
-            ):
-                return True
+            if bgr is not None and gray is not None:
+                workflow_visible = any(
+                    self._matches(key, bgr, gray)
+                    for key in ("deck_confirm_dialog", "deck_selection_page")
+                )
+                result_visible = any(
+                    self._matches(key, bgr, gray)
+                    for key in ("war", "win", "result")
+                )
+                if not workflow_visible and result_visible:
+                    stable_frames += 1
+                    if stable_frames >= 2:
+                        return True
+                else:
+                    stable_frames = 0
             self.device_state.sleep(0.25)
         return False
 

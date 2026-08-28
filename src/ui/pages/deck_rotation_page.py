@@ -107,7 +107,7 @@ class DeckRotationPage(QWidget):
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("按序循环", "cycle")
         self.mode_combo.addItem("按序执行一轮", "once")
-        self.mode_combo.addItem("随机且不连续重复", "random")
+        self.mode_combo.addItem("独立随机（允许连续重复）", "random")
         form.addWidget(self.mode_combo, 1, 1, 1, 2)
         form.addWidget(QLabel("切换失败"), 2, 0)
         self.failure_combo = QComboBox()
@@ -203,6 +203,8 @@ class DeckRotationPage(QWidget):
         self.sequence_list.model().rowsRemoved.connect(self._update_summary)
         self.sequence_list.model().rowsMoved.connect(self._update_summary)
         self.enabled_check.toggled.connect(self._sync_enabled)
+        self.mode_combo.currentIndexChanged.connect(self._update_summary)
+        self.switch_on_start_check.toggled.connect(self._update_summary)
 
     def _append_slot(self, slot: int) -> None:
         item = QListWidgetItem(self._slot_item_text(slot))
@@ -252,8 +254,16 @@ class DeckRotationPage(QWidget):
             item.setText(self._slot_item_text(slot))
         labels = [self._slot_item_text(slot).replace("卡组 ", "", 1) for slot in sequence]
         startup = "启动先同步首项" if self.switch_on_start_check.isChecked() else "启动时沿用当前卡组"
+        mode = str(self.mode_combo.currentData() or "cycle")
+        mode_hint = (
+            "独立随机抽取，允许连续重复"
+            if mode == "random"
+            else ("按序执行一轮" if mode == "once" else "按序循环")
+        )
+        sequence_label = "随机候选" if mode == "random" else "使用顺序"
         self.summary_label.setText(
-            f"{startup}；使用顺序：" + (" → ".join(labels) if labels else "未设置")
+            f"{startup}；{mode_hint}；{sequence_label}："
+            + (" → ".join(labels) if labels else "未设置")
         )
 
     def _sync_enabled(self, enabled: bool) -> None:

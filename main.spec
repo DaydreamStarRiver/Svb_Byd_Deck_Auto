@@ -6,7 +6,11 @@
 import os
 import sys
 
-from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 # 获取项目根目录
 try:
@@ -35,10 +39,21 @@ model_files = [
     os.path.join('models', 'english_g2.pth'),
     os.path.join('models', 'mnist_adv.onnx'),
 ]
+missing_model_files = []
 for rel_path in model_files:
     src = os.path.join(project_root, rel_path)
     if os.path.exists(src):
         datas.append((src, os.path.dirname(rel_path)))
+    else:
+        missing_model_files.append(rel_path)
+if missing_model_files:
+    raise FileNotFoundError(
+        '缺少运行必需模型，已停止打包: {}'.format(', '.join(missing_model_files))
+    )
+
+# 官方卡牌库更新需要 Requests 的 CA 证书；显式收集，避免冻结环境中
+# “检查官方更新”因找不到 certifi/cacert.pem 而发生 HTTPS 校验失败。
+datas.extend(collect_data_files('certifi'))
 
 # Maa 入口暂时隐藏，但保留完整运行资源，方便后续只开启功能开关即可联调。
 maa_model_dir = os.path.join(project_root, 'models', 'maa_ocr')
@@ -51,10 +66,13 @@ hp_mask_candidates = [
     os.path.join(project_root, 'templates_global', 'hp_mask.png'),
     os.path.join(project_root, 'templates', 'hp_mask.png'),
 ]
+hp_mask_file = None
 for hp_mask_file in hp_mask_candidates:
     if os.path.exists(hp_mask_file):
         datas.append((hp_mask_file, 'src/masks'))
         break
+else:
+    raise FileNotFoundError('缺少 HP 识别遮罩，已停止打包: hp_mask.png')
 
 # 包含uiautomator2的assets资源文件（兼容venv/conda）
 uiautomator2_assets_candidates = []
@@ -74,6 +92,7 @@ except Exception:
     pass
 
 _seen_assets = set()
+u2_assets_found = False
 for u2_assets_dir in uiautomator2_assets_candidates:
     norm = os.path.normcase(os.path.abspath(u2_assets_dir))
     if norm in _seen_assets:
@@ -81,7 +100,10 @@ for u2_assets_dir in uiautomator2_assets_candidates:
     _seen_assets.add(norm)
     if os.path.isdir(u2_assets_dir):
         datas.append((u2_assets_dir, 'uiautomator2/assets'))
+        u2_assets_found = True
         break
+if not u2_assets_found:
+    raise FileNotFoundError('缺少 uiautomator2/assets，已停止打包')
 
 # 包含必要的配置文件
 config_files = ['LICENSE', 'README.md']
@@ -112,8 +134,17 @@ hiddenimports = [
     'torch',
     'torchvision',
     'cv2',
+    'numpy',
     'requests',
+    'certifi',
     'PIL.Image',
+    # 卡牌库更新会解码官方 PNG 并编码为 WebP；Pillow 插件为动态注册。
+    'PIL.PngImagePlugin',
+    'PIL.WebPImagePlugin',
+    'PIL._webp',
+    # 这两条链路由卡组中心触发，显式保留以防后续页面改为延迟导入。
+    'src.ui.card_library_update',
+    'src.ui.deck_qr',
     'src.utils.card_swap_strategy_enhanced',
     'src.config.card_priorities',
 ]
@@ -214,6 +245,8 @@ print("1. 使用虚拟环境路径: {}".format(venv_path if os.path.exists(venv_
 print("2. 已排除的配置文件目录: {}".format(", ".join(excluded_dirs)))
 print("3. 包含的核心模型文件: {}".format(", ".join(model_files)))
 print("4. Maa OCR 模型: {}".format("已包含" if os.path.isdir(maa_model_dir) else "未找到"))
-print("5. 打包完成后，请确保以下目录与可执行文件在同一目录下:")
+print("5. 已包含官方卡牌库更新所需的 HTTPS 证书与 PNG/WebP 插件")
+print("6. 已包含游戏卡组二维码解析所需的 OpenCV QR 支持")
+print("7. 打包完成后，请确保以下目录与可执行文件在同一目录下:")
 for dir_name in excluded_dirs:
     print("   - {}".format(dir_name))
