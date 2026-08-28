@@ -112,13 +112,35 @@ QPushButton#SidebarAboutButton:hover {
     background-color: #282838;
 }
 
-QFrame[card="true"], QFrame#SurfacePanel, QFrame#MetricCard, QGroupBox {
+QFrame[card="true"], QFrame#SurfacePanel, QFrame#DashboardPanel,
+QFrame#MetricCard, QGroupBox {
     background-color: #282838;
     border: 1px solid #3a3a4a;
     border-radius: 6px;
 }
 
-QFrame[card="true"]:hover, QFrame#MetricCard:hover {
+QFrame#DashboardPanel {
+    background-color: #262637;
+    border-color: #3b3d52;
+    border-radius: 8px;
+}
+
+QFrame#StatusBanner {
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 #292a3d, stop: 1 #252536
+    );
+    border: 1px solid #414660;
+    border-left: 3px solid #89b4fa;
+    border-radius: 8px;
+}
+
+QWidget#StatusBannerContent, QWidget#StatusBannerActions {
+    background: transparent;
+}
+
+QFrame[card="true"]:hover, QFrame#MetricCard:hover,
+QFrame#DashboardPanel:hover {
     border-color: #4a4a5a;
 }
 
@@ -145,8 +167,16 @@ QLabel[dim="true"], QLabel#MetricDetail {
 QLabel#MetricValue {
     color: #cdd6f4;
     font-family: Consolas, "Microsoft YaHei UI", monospace;
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 700;
+}
+
+QLabel#MetricTitle {
+    font-size: 12px;
+}
+
+QLabel#MetricDetail {
+    font-size: 11px;
 }
 
 QLabel#MetricValue[accent="primary"] { color: #89b4fa; }
@@ -539,7 +569,14 @@ QTabBar::tab:selected {
 QScrollArea,
 QScrollArea QWidget#qt_scrollarea_viewport,
 QWidget#PriorityScrollContent,
-QWidget#SettingsContent {
+QWidget#SettingsContent,
+QWidget#DashboardContent {
+    background: transparent;
+    border: 0;
+}
+
+QScrollArea#DashboardScroll,
+QScrollArea#DashboardScroll QWidget#qt_scrollarea_viewport {
     background: transparent;
     border: 0;
 }

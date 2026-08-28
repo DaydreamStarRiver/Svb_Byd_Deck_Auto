@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QTextEdit,
     QVBoxLayout,
@@ -37,23 +38,30 @@ class MetricCard(QFrame):
         super().__init__(parent)
         self.setObjectName("MetricCard")
         self.setProperty("accent", accent)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(6)
+        layout.setContentsMargins(13, 11, 13, 11)
+        layout.setSpacing(4)
         title_label = QLabel(title)
         title_label.setObjectName("MetricTitle")
         self.value_label = QLabel(value)
         self.value_label.setObjectName("MetricValue")
         self.value_label.setProperty("accent", accent)
+        self.value_label.setMinimumWidth(0)
+        self.value_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.detail_label = QLabel("")
         self.detail_label.setObjectName("MetricDetail")
+        self.detail_label.setVisible(False)
         layout.addWidget(title_label)
         layout.addWidget(self.value_label)
         layout.addWidget(self.detail_label)
 
     def set_value(self, value: Any, detail: str = "") -> None:
         self.value_label.setText(str(value))
-        self.detail_label.setText(str(detail or ""))
+        detail_text = str(detail or "")
+        self.detail_label.setText(detail_text)
+        self.detail_label.setVisible(bool(detail_text))
 
 
 class CostCurveWidget(QWidget):
@@ -241,23 +249,45 @@ class DashboardPage(QWidget):
         super().__init__(parent)
         self._run_status = "disconnected"
         self._device_connected = False
+        self._responsive_mode = ""
+        self._banner_compact = None
         self._build_ui()
         self.set_run_status("disconnected")
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 24)
-        root.setSpacing(14)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("DashboardScroll")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.content = QWidget()
+        self.content.setObjectName("DashboardContent")
+        self.content.setProperty("pageRoot", True)
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(24, 22, 24, 20)
+        self.content_layout.setSpacing(14)
 
         title = QLabel("仪表盘")
         title.setObjectName("PageTitle")
-        root.addWidget(title)
+        self.content_layout.addWidget(title)
 
         self.device_banner = QFrame()
-        self.device_banner.setObjectName("SurfacePanel")
-        banner = QHBoxLayout(self.device_banner)
-        banner.setContentsMargins(16, 14, 16, 14)
-        banner.setSpacing(12)
+        self.device_banner.setObjectName("StatusBanner")
+        self.banner_layout = QGridLayout(self.device_banner)
+        self.banner_layout.setContentsMargins(16, 13, 16, 13)
+        self.banner_layout.setHorizontalSpacing(14)
+        self.banner_layout.setVerticalSpacing(10)
+
+        self.device_overview = QWidget()
+        self.device_overview.setObjectName("StatusBannerContent")
+        overview = QHBoxLayout(self.device_overview)
+        overview.setContentsMargins(0, 0, 0, 0)
+        overview.setSpacing(11)
         self.device_dot = QLabel("●")
         self.device_dot.setObjectName("DeviceDot")
         self.device_status = QLabel("设备未连接")
@@ -276,9 +306,14 @@ class DashboardPage(QWidget):
         device_title.addStretch(1)
         device_text.addLayout(device_title)
         device_text.addWidget(self.device_detail)
-        banner.addWidget(self.device_dot)
-        banner.addLayout(device_text, 1)
-        banner.addStretch()
+        overview.addWidget(self.device_dot)
+        overview.addLayout(device_text, 1)
+
+        self.banner_actions = QWidget()
+        self.banner_actions.setObjectName("StatusBannerActions")
+        action_layout = QHBoxLayout(self.banner_actions)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(8)
         self.start_button = QPushButton("开始运行")
         self.start_button.setObjectName("PrimaryButton")
         self.start_button.clicked.connect(self.start_requested)
@@ -297,19 +332,19 @@ class DashboardPage(QWidget):
             self.resume_button,
             self.stop_button,
         ):
-            banner.addWidget(button)
-        root.addWidget(self.device_banner)
+            action_layout.addWidget(button)
+        self.banner_layout.addWidget(self.device_overview, 0, 0)
+        self.banner_layout.addWidget(self.banner_actions, 0, 1)
+        self.banner_layout.setColumnStretch(0, 1)
+        self.content_layout.addWidget(self.device_banner)
 
-        body = QHBoxLayout()
-        body.setSpacing(16)
-        left_column = QVBoxLayout()
-        left_column.setSpacing(14)
-        right_column = QVBoxLayout()
-        right_column.setSpacing(14)
+        self.body = QGridLayout()
+        self.body.setHorizontalSpacing(16)
+        self.body.setVerticalSpacing(14)
 
-        control_panel = QFrame()
-        control_panel.setObjectName("SurfacePanel")
-        control = QVBoxLayout(control_panel)
+        self.control_panel = QFrame()
+        self.control_panel.setObjectName("DashboardPanel")
+        control = QVBoxLayout(self.control_panel)
         control.setContentsMargins(18, 16, 18, 18)
         control.setSpacing(14)
         control.addWidget(self._section_title("运行控制"))
@@ -353,11 +388,9 @@ class DashboardPage(QWidget):
         device_form.addWidget(self.server_combo, 1, 1)
         device_form.setColumnStretch(3, 1)
         control.addLayout(device_form)
-        left_column.addWidget(control_panel)
-
-        log_panel = QFrame()
-        log_panel.setObjectName("SurfacePanel")
-        log_layout = QVBoxLayout(log_panel)
+        self.log_panel = QFrame()
+        self.log_panel.setObjectName("DashboardPanel")
+        log_layout = QVBoxLayout(self.log_panel)
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_layout.setSpacing(0)
         log_header = QHBoxLayout()
@@ -375,11 +408,9 @@ class DashboardPage(QWidget):
         self.log_output.setMinimumHeight(220)
         self.log_output.document().setMaximumBlockCount(1000)
         log_layout.addWidget(self.log_output)
-        left_column.addWidget(log_panel, 1)
-
-        run_panel = QFrame()
-        run_panel.setObjectName("SurfacePanel")
-        run = QVBoxLayout(run_panel)
+        self.run_panel = QFrame()
+        self.run_panel.setObjectName("DashboardPanel")
+        run = QVBoxLayout(self.run_panel)
         run.setContentsMargins(18, 16, 18, 18)
         run.setSpacing(12)
         run.addWidget(self._section_title("本次运行"))
@@ -397,11 +428,9 @@ class DashboardPage(QWidget):
         metrics.setColumnStretch(0, 1)
         metrics.setColumnStretch(1, 1)
         run.addLayout(metrics)
-        right_column.addWidget(run_panel)
-
-        deck_panel = QFrame()
-        deck_panel.setObjectName("SurfacePanel")
-        deck = QVBoxLayout(deck_panel)
+        self.deck_panel = QFrame()
+        self.deck_panel.setObjectName("DashboardPanel")
+        deck = QVBoxLayout(self.deck_panel)
         deck.setContentsMargins(18, 16, 18, 16)
         deck.setSpacing(10)
         deck_header = QHBoxLayout()
@@ -442,12 +471,7 @@ class DashboardPage(QWidget):
         deck.addWidget(curve_label)
         self.cost_curve = CostCurveWidget()
         deck.addWidget(self.cost_curve)
-        right_column.addWidget(deck_panel)
-        right_column.addStretch(1)
-
-        body.addLayout(left_column, 7)
-        body.addLayout(right_column, 5)
-        root.addLayout(body, 1)
+        self.content_layout.addLayout(self.body, 1)
 
         notice = QFrame()
         notice.setObjectName("DisclaimerStrip")
@@ -462,7 +486,71 @@ class DashboardPage(QWidget):
         self.disclaimer_button.setObjectName("LinkButton")
         self.disclaimer_button.clicked.connect(self.disclaimer_requested)
         notice_layout.addWidget(self.disclaimer_button)
-        root.addWidget(notice)
+        self.content_layout.addWidget(notice)
+        self.scroll_area.setWidget(self.content)
+        root.addWidget(self.scroll_area)
+        self._apply_responsive_layout(1280)
+
+    @staticmethod
+    def _clear_layout(layout) -> None:
+        while layout.count():
+            layout.takeAt(0)
+
+    def _apply_responsive_layout(self, width: int) -> None:
+        """根据页面逻辑宽度重排卡片，兼容高 DPI 下的 1080p 窗口。"""
+
+        available = max(0, int(width or 0))
+        mode = "wide" if available >= 1040 else "stacked"
+        banner_compact = available < 840
+
+        if mode != self._responsive_mode:
+            self._clear_layout(self.body)
+            if mode == "wide":
+                self.body.addWidget(self.control_panel, 0, 0)
+                self.body.addWidget(self.run_panel, 0, 1)
+                self.body.addWidget(self.log_panel, 1, 0)
+                self.body.addWidget(self.deck_panel, 1, 1, Qt.AlignTop)
+                self.body.setColumnStretch(0, 7)
+                self.body.setColumnStretch(1, 5)
+                self.body.setRowStretch(0, 0)
+                self.body.setRowStretch(1, 1)
+                self.log_output.setMinimumHeight(220)
+                self.content_layout.setContentsMargins(24, 22, 24, 20)
+            else:
+                self.body.addWidget(self.control_panel, 0, 0)
+                self.body.addWidget(self.run_panel, 1, 0)
+                self.body.addWidget(self.deck_panel, 2, 0)
+                self.body.addWidget(self.log_panel, 3, 0)
+                self.body.setColumnStretch(0, 1)
+                self.body.setColumnStretch(1, 0)
+                self.body.setRowStretch(0, 0)
+                self.body.setRowStretch(1, 0)
+                self.log_output.setMinimumHeight(280)
+                self.content_layout.setContentsMargins(16, 16, 16, 16)
+            self.body.invalidate()
+            self.content_layout.invalidate()
+            self.content.adjustSize()
+            self.content.updateGeometry()
+            self._responsive_mode = mode
+
+        if banner_compact != self._banner_compact:
+            self.banner_layout.removeWidget(self.device_overview)
+            self.banner_layout.removeWidget(self.banner_actions)
+            if banner_compact:
+                self.banner_layout.addWidget(self.device_overview, 0, 0)
+                self.banner_layout.addWidget(self.banner_actions, 1, 0)
+                self.banner_layout.setColumnStretch(0, 1)
+                self.banner_layout.setColumnStretch(1, 0)
+            else:
+                self.banner_layout.addWidget(self.device_overview, 0, 0)
+                self.banner_layout.addWidget(self.banner_actions, 0, 1)
+                self.banner_layout.setColumnStretch(0, 1)
+                self.banner_layout.setColumnStretch(1, 0)
+            self._banner_compact = banner_compact
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API 命名
+        super().resizeEvent(event)
+        self._apply_responsive_layout(event.size().width())
 
     @staticmethod
     def _section_title(text: str) -> QLabel:

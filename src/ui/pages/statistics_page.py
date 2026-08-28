@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -145,7 +146,8 @@ class MetricCard(QFrame):
     def __init__(self, title: str, accent: str, parent=None):
         super().__init__(parent)
         self.setObjectName("MetricCard")
-        self.setMinimumSize(170, 112)
+        self.setMinimumSize(0, 98)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
@@ -185,6 +187,7 @@ class StatisticsPage(QWidget):
         self._live_runtime_seconds = 0
         self._live_battle_count: Optional[int] = None
         self._snapshot: Optional[StatisticsSnapshot] = None
+        self._responsive_mode = ""
         self._build_ui()
         self.refresh_stats()
 
@@ -192,9 +195,20 @@ class StatisticsPage(QWidget):
         self.setObjectName("StatisticsPage")
         self.setProperty("pageRoot", True)
 
-        root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(28, 24, 28, 24)
-        root_layout.setSpacing(18)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("StatisticsScroll")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.content = QWidget()
+        self.content.setObjectName("StatisticsContent")
+        self.content.setProperty("pageRoot", True)
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(28, 24, 28, 24)
+        self.content_layout.setSpacing(18)
 
         title = QLabel("\u7edf\u8ba1\u5206\u6790")
         title.setObjectName("PageTitle")
@@ -202,12 +216,12 @@ class StatisticsPage(QWidget):
             "查看对战数量、胜负、胜率、局时和回合趋势"
         )
         subtitle.setObjectName("SubtleText")
-        root_layout.addWidget(title)
-        root_layout.addWidget(subtitle)
+        self.content_layout.addWidget(title)
+        self.content_layout.addWidget(subtitle)
 
-        metrics_layout = QGridLayout()
-        metrics_layout.setHorizontalSpacing(12)
-        metrics_layout.setVerticalSpacing(12)
+        self.metrics_layout = QGridLayout()
+        self.metrics_layout.setHorizontalSpacing(12)
+        self.metrics_layout.setVerticalSpacing(12)
 
         self.today_card = MetricCard("\u4eca\u65e5\u5bf9\u6218", "#45c7a4")
         self.duration_card = MetricCard("\u5e73\u5747\u5c40\u65f6", "#5aa9fa")
@@ -218,30 +232,35 @@ class StatisticsPage(QWidget):
         self.win_rate_card = MetricCard("胜率", "#5aa9fa")
         self.unknown_card = MetricCard("未判定", "#9aa4b2")
 
-        metrics_layout.addWidget(self.today_card, 0, 0)
-        metrics_layout.addWidget(self.duration_card, 0, 1)
-        metrics_layout.addWidget(self.rounds_card, 0, 2)
-        metrics_layout.addWidget(self.run_card, 0, 3)
-        metrics_layout.addWidget(self.win_card, 1, 0)
-        metrics_layout.addWidget(self.loss_card, 1, 1)
-        metrics_layout.addWidget(self.win_rate_card, 1, 2)
-        metrics_layout.addWidget(self.unknown_card, 1, 3)
-        for column in range(4):
-            metrics_layout.setColumnStretch(column, 1)
-        root_layout.addLayout(metrics_layout)
+        self.metric_cards = (
+            self.today_card,
+            self.duration_card,
+            self.rounds_card,
+            self.run_card,
+            self.win_card,
+            self.loss_card,
+            self.win_rate_card,
+            self.unknown_card,
+        )
+        self.content_layout.addLayout(self.metrics_layout)
 
-        deck_panel = QFrame()
-        deck_panel.setObjectName("SurfacePanel")
-        deck_layout = QVBoxLayout(deck_panel)
+        self.deck_panel = QFrame()
+        self.deck_panel.setObjectName("SurfacePanel")
+        deck_layout = QVBoxLayout(self.deck_panel)
         deck_layout.setContentsMargins(18, 14, 18, 14)
         deck_layout.setSpacing(8)
-        deck_header = QHBoxLayout()
+        deck_header_widget = QWidget()
+        deck_header_widget.setObjectName("StatisticsDeckHeader")
+        deck_header_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        deck_header = QHBoxLayout(deck_header_widget)
+        deck_header.setContentsMargins(0, 0, 0, 0)
         deck_header.addWidget(QLabel("各卡组战绩"))
         deck_header.addStretch(1)
         deck_hint = QLabel("按本地构筑汇总；旧记录会列为未标记")
         deck_hint.setObjectName("SubtleText")
+        deck_hint.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         deck_header.addWidget(deck_hint)
-        deck_layout.addLayout(deck_header)
+        deck_layout.addWidget(deck_header_widget)
         self.deck_stats_table = QTableWidget(0, 7)
         self.deck_stats_table.setHorizontalHeaderLabels(
             ["本地构筑", "游戏槽位", "对局", "胜", "负", "胜率", "未判定"]
@@ -258,12 +277,16 @@ class StatisticsPage(QWidget):
                 column, QHeaderView.ResizeToContents
             )
         self.deck_stats_table.setMinimumHeight(155)
-        self.deck_stats_table.setMaximumHeight(230)
-        deck_layout.addWidget(self.deck_stats_table)
+        self.deck_stats_table.setMinimumWidth(0)
+        self.deck_stats_table.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        deck_layout.addWidget(self.deck_stats_table, 1)
 
-        chart_panel = QFrame()
-        chart_panel.setObjectName("SurfacePanel")
-        chart_layout = QVBoxLayout(chart_panel)
+        self.chart_panel = QFrame()
+        self.chart_panel.setObjectName("SurfacePanel")
+        chart_layout = QVBoxLayout(self.chart_panel)
         chart_layout.setContentsMargins(18, 16, 18, 12)
         chart_layout.setSpacing(8)
 
@@ -273,6 +296,7 @@ class StatisticsPage(QWidget):
         self.source_label = QLabel("")
         self.source_label.setObjectName("SubtleText")
         self.source_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.source_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         chart_header.addWidget(chart_title)
         chart_header.addStretch(1)
         chart_header.addWidget(self.source_label)
@@ -280,15 +304,14 @@ class StatisticsPage(QWidget):
 
         self.daily_chart = DailyBattleChart()
         chart_layout.addWidget(self.daily_chart, 1)
-        analysis_layout = QHBoxLayout()
-        analysis_layout.setSpacing(12)
-        analysis_layout.addWidget(deck_panel, 3)
-        analysis_layout.addWidget(chart_panel, 2)
-        root_layout.addLayout(analysis_layout, 1)
+        self.analysis_layout = QGridLayout()
+        self.analysis_layout.setHorizontalSpacing(12)
+        self.analysis_layout.setVerticalSpacing(12)
+        self.content_layout.addLayout(self.analysis_layout, 1)
 
-        run_panel = QFrame()
-        run_panel.setObjectName("SurfacePanel")
-        run_layout = QVBoxLayout(run_panel)
+        self.run_panel = QFrame()
+        self.run_panel.setObjectName("SurfacePanel")
+        run_layout = QVBoxLayout(self.run_panel)
         run_layout.setContentsMargins(18, 14, 18, 14)
         run_layout.setSpacing(6)
         run_title = QLabel("\u8fd0\u884c\u6458\u8981")
@@ -298,7 +321,52 @@ class StatisticsPage(QWidget):
         self.run_summary_label.setWordWrap(True)
         run_layout.addWidget(run_title)
         run_layout.addWidget(self.run_summary_label)
-        root_layout.addWidget(run_panel)
+        self.content_layout.addWidget(self.run_panel)
+        self.scroll_area.setWidget(self.content)
+        outer_layout.addWidget(self.scroll_area)
+        self._apply_responsive_layout(1280)
+
+    @staticmethod
+    def _clear_layout(layout) -> None:
+        while layout.count():
+            layout.takeAt(0)
+
+    def _apply_responsive_layout(self, width: int) -> None:
+        mode = "wide" if int(width or 0) >= 1040 else "stacked"
+        if mode == self._responsive_mode:
+            return
+
+        self._clear_layout(self.metrics_layout)
+        self._clear_layout(self.analysis_layout)
+        columns = 4 if mode == "wide" else 2
+        for index, card in enumerate(self.metric_cards):
+            self.metrics_layout.addWidget(card, index // columns, index % columns)
+        for column in range(4):
+            self.metrics_layout.setColumnStretch(column, 1 if column < columns else 0)
+
+        if mode == "wide":
+            self.analysis_layout.addWidget(self.deck_panel, 0, 0)
+            self.analysis_layout.addWidget(self.chart_panel, 0, 1)
+            self.analysis_layout.setColumnStretch(0, 3)
+            self.analysis_layout.setColumnStretch(1, 2)
+            self.content_layout.setContentsMargins(28, 24, 28, 24)
+        else:
+            self.analysis_layout.addWidget(self.deck_panel, 0, 0)
+            self.analysis_layout.addWidget(self.chart_panel, 1, 0)
+            self.analysis_layout.setColumnStretch(0, 1)
+            self.analysis_layout.setColumnStretch(1, 0)
+            self.content_layout.setContentsMargins(16, 16, 16, 16)
+
+        self.metrics_layout.invalidate()
+        self.analysis_layout.invalidate()
+        self.content_layout.invalidate()
+        self.content.adjustSize()
+        self.content.updateGeometry()
+        self._responsive_mode = mode
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API 命名
+        super().resizeEvent(event)
+        self._apply_responsive_layout(event.size().width())
 
     def refresh_stats(self) -> StatisticsSnapshot:
         """重新加载持久化统计并更新全部指标。"""

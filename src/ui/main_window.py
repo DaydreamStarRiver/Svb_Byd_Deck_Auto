@@ -219,8 +219,15 @@ class ShadowverseUI(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Shadowverse Auto Control Center")
-        self.resize(1280, 800)
-        self.setMinimumSize(1100, 680)
+        self.setMinimumSize(980, 620)
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.resize(1280, 800)
+        else:
+            available = screen.availableGeometry()
+            target_width = min(1560, max(980, int(available.width() * 0.90)))
+            target_height = min(960, max(620, int(available.height() * 0.90)))
+            self.resize(target_width, target_height)
 
         central = BackgroundWidget()
         self.app_root = central
@@ -289,7 +296,7 @@ class ShadowverseUI(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(202)
+        sidebar.setFixedWidth(190)
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)

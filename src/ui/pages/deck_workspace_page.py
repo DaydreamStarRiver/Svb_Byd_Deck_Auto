@@ -230,6 +230,7 @@ class DeckWorkspacePage(QWidget):
         self._card_update_result: Optional[Dict[str, Any]] = None
         self._card_update_error = ""
         self._card_update_operation = ""
+        self._responsive_mode = ""
         self.deck_store = getattr(parent, "deck_store", None)
         self._build_ui()
         self._visible_icon_timer = QTimer(self)
@@ -269,9 +270,9 @@ class DeckWorkspacePage(QWidget):
         self._set_selected_entries(entries)
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 24)
-        root.setSpacing(14)
+        self.root_layout = QVBoxLayout(self)
+        self.root_layout.setContentsMargins(24, 22, 24, 24)
+        self.root_layout.setSpacing(14)
         title_row = QHBoxLayout()
         title = QLabel("卡组工作区")
         title.setObjectName("PageTitle")
@@ -280,13 +281,14 @@ class DeckWorkspacePage(QWidget):
         self.catalog_status = QLabel("")
         self.catalog_status.setObjectName("SubtleText")
         title_row.addWidget(self.catalog_status)
-        root.addLayout(title_row)
+        self.root_layout.addLayout(title_row)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.addTab(self._build_builder_tab(), "卡组构筑")
         self.tabs.addTab(self._build_share_tab(), "分享与导入")
-        root.addWidget(self.tabs, 1)
+        self.root_layout.addWidget(self.tabs, 1)
+        self._apply_responsive_layout(1280)
 
     def _build_builder_tab(self) -> QWidget:
         page = QWidget()
@@ -337,15 +339,33 @@ class DeckWorkspacePage(QWidget):
         categories.addStretch()
         layout.addWidget(category_bar)
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._build_library_panel())
-        splitter.addWidget(self._build_current_panel())
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([760, 420])
-        layout.addWidget(splitter, 1)
+        self.builder_splitter = QSplitter(Qt.Horizontal)
+        self.builder_splitter.setChildrenCollapsible(False)
+        self.builder_splitter.addWidget(self._build_library_panel())
+        self.builder_splitter.addWidget(self._build_current_panel())
+        self.builder_splitter.setStretchFactor(0, 3)
+        self.builder_splitter.setStretchFactor(1, 2)
+        self.builder_splitter.setSizes([760, 420])
+        layout.addWidget(self.builder_splitter, 1)
         return page
+
+    def _apply_responsive_layout(self, width: int) -> None:
+        mode = "wide" if int(width or 0) >= 1040 else "stacked"
+        if mode == self._responsive_mode or not hasattr(self, "builder_splitter"):
+            return
+        if mode == "wide":
+            self.root_layout.setContentsMargins(24, 22, 24, 24)
+            self.builder_splitter.setOrientation(Qt.Horizontal)
+            self.builder_splitter.setSizes([760, 420])
+        else:
+            self.root_layout.setContentsMargins(16, 16, 16, 16)
+            self.builder_splitter.setOrientation(Qt.Vertical)
+            self.builder_splitter.setSizes([420, 320])
+        self._responsive_mode = mode
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API 命名
+        super().resizeEvent(event)
+        self._apply_responsive_layout(event.size().width())
 
     def _build_library_panel(self) -> QWidget:
         panel = QFrame()

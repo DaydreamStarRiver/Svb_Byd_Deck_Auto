@@ -250,6 +250,7 @@ def run_gui(argv: Optional[list[str]] = None) -> int:
     # 只加载系统运行库，不加载 Maa/EasyOCR 或任何识别模型。
     prepare_windows_cpp_runtime()
 
+    from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QApplication
 
     from src.ui.disclaimer import request_startup_disclaimer
@@ -271,6 +272,9 @@ def run_gui(argv: Optional[list[str]] = None) -> int:
             device_config=device_config,
         )
 
+    # Qt5 默认不一定启用高 DPI 缩放；必须在 QApplication 创建前设置。
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     app = QApplication(argv if argv is not None else _sys.argv)
     apply_theme(app)
     if not request_startup_disclaimer():
