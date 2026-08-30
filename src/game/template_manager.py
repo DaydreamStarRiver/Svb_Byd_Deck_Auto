@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # 结算页的“返回乐园”文字会随渲染后端产生轻微抗锯齿差异，单独放宽阈值。
 GALA_BACK_PARK_THRESHOLD = 0.82
 SETTLEMENT_TEMPLATE_THRESHOLD = 0.80
+DECK_SELECTION_TEMPLATE_THRESHOLD = 0.80
 
 
 PAGE_TEXT_ALIASES = {
@@ -116,12 +117,18 @@ class TemplateManager:
                 "确认牌组弹窗",
                 threshold=0.72,
                 multiscale=True,
+                # 弹窗标题只会出现在画面上方偏下。限定搜索区域可避免
+                # 选择页标题以及结算页装饰被误当成弹窗标识。
+                search_region=(0.30, 0.10, 0.70, 0.28),
             ),
             'deck_selection_page': self._create_optional_template_info(
                 'Select_Deck.png',
                 "选择牌组页面",
-                threshold=0.72,
+                threshold=DECK_SELECTION_TEMPLATE_THRESHOLD,
                 multiscale=True,
+                # 选择牌组的标题位于顶部栏；确认弹窗与结算页中的相似
+                # 纹理均在更低位置，不应参与该页面的状态判定。
+                search_region=(0.30, 0.02, 0.70, 0.16),
             ),
             'mainPage': self._create_template_info('mainPage.png', "游戏主页面"),
             'MuMuPage': self._create_template_info('MuMuPage.png', "MuMu主页面"),
@@ -217,6 +224,7 @@ class TemplateManager:
         threshold: float = 0.85,
         hsv_range: Optional[Dict[str, Any]] = None,
         multiscale: bool = False,
+        search_region: Optional[Tuple[float, float, float, float]] = None,
     ) -> Optional[Dict[str, Any]]:
         """创建模板信息字典"""
         template_img = self._load_template(self.templates_dir, filename)
@@ -225,6 +233,8 @@ class TemplateManager:
 
         info = self._create_template_info_from_image(template_img, name, threshold, hsv_range)
         info["multiscale"] = bool(multiscale)
+        if search_region is not None:
+            info["search_region"] = tuple(float(value) for value in search_region)
         return info
 
     def _create_optional_template_info(
@@ -234,6 +244,7 @@ class TemplateManager:
         threshold: float = 0.85,
         hsv_range: Optional[Dict[str, Any]] = None,
         multiscale: bool = False,
+        search_region: Optional[Tuple[float, float, float, float]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Load an optional feature template without emitting a startup error."""
 
@@ -245,6 +256,7 @@ class TemplateManager:
             threshold=threshold,
             hsv_range=hsv_range,
             multiscale=multiscale,
+            search_region=search_region,
         )
 
     def _create_template_info_from_image(
@@ -277,6 +289,27 @@ class TemplateManager:
         tpl = template_info['template']
         hsv_range = template_info.get('hsv_range', None)
 
+        # 部分页面标题在全屏上有高度相似的装饰纹理。对这类模板只在
+        # 其固定的 UI 区域内匹配，避免一个低阈值假阳性封死整个状态机。
+        search_image = image
+        offset_x = 0
+        offset_y = 0
+        search_region = template_info.get("search_region")
+        if search_region is not None and len(search_region) == 4:
+            image_h, image_w = image.shape[:2]
+            left, top, right, bottom = (
+                max(0.0, min(1.0, float(value))) for value in search_region
+            )
+            x1 = int(round(image_w * min(left, right)))
+            x2 = int(round(image_w * max(left, right)))
+            y1 = int(round(image_h * min(top, bottom)))
+            y2 = int(round(image_h * max(top, bottom)))
+            if x2 <= x1 or y2 <= y1:
+                return None, 0.0
+            search_image = image[y1:y2, x1:x2]
+            offset_x = x1
+            offset_y = y1
+
         if len(tpl.shape) == 2:
             if template_info.get("multiscale"):
                 best_loc = None
@@ -291,13 +324,21 @@ class TemplateManager:
                         fy=scale,
                         interpolation=cv2.INTER_CUBIC,
                     )
-                    if scaled.shape[0] > image.shape[0] or scaled.shape[1] > image.shape[1]:
+                    if (
+                        scaled.shape[0] > search_image.shape[0]
+                        or scaled.shape[1] > search_image.shape[1]
+                    ):
                         continue
-                    result = cv2.matchTemplate(image, scaled, cv2.TM_CCOEFF_NORMED)
+                    result = cv2.matchTemplate(
+                        search_image, scaled, cv2.TM_CCOEFF_NORMED
+                    )
                     _, value, _, loc = cv2.minMaxLoc(result)
                     if value > best_value:
                         best_value = float(value)
-                        best_loc = (int(loc[0]), int(loc[1]))
+                        best_loc = (
+                            int(loc[0]) + offset_x,
+                            int(loc[1]) + offset_y,
+                        )
                         best_width = int(scaled.shape[1])
                         best_height = int(scaled.shape[0])
                 if best_loc is not None:
@@ -306,19 +347,33 @@ class TemplateManager:
                     return best_loc, best_value
                 return None, 0.0
 
-            result = cv2.matchTemplate(image, tpl, cv2.TM_CCOEFF_NORMED)
+            if (
+                tpl.shape[0] > search_image.shape[0]
+                or tpl.shape[1] > search_image.shape[1]
+            ):
+                return None, 0.0
+            result = cv2.matchTemplate(search_image, tpl, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(result)
             if max_loc is not None and isinstance(max_loc, tuple) and len(max_loc) == 2:
-                return (int(max_loc[0]), int(max_loc[1])), float(max_val)
+                return (
+                    int(max_loc[0]) + offset_x,
+                    int(max_loc[1]) + offset_y,
+                ), float(max_val)
             return None, float(max_val)
 
-        result = cv2.matchTemplate(image, tpl, cv2.TM_CCOEFF_NORMED)
+        if (
+            tpl.shape[0] > search_image.shape[0]
+            or tpl.shape[1] > search_image.shape[1]
+        ):
+            return None, 0.0
+        result = cv2.matchTemplate(search_image, tpl, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(result)
         if max_loc is None or not isinstance(max_loc, tuple) or len(max_loc) != 2:
             return None, float(max_val)
 
         h, w, _ = tpl.shape
-        x, y = int(max_loc[0]), int(max_loc[1])
+        x = int(max_loc[0]) + offset_x
+        y = int(max_loc[1]) + offset_y
         roi = image[y:y+h, x:x+w]
         if roi.shape[0] != h or roi.shape[1] != w:
             return None, float(max_val)

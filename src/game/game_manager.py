@@ -1603,31 +1603,17 @@ class GameManager:
 
     def detect_existing_match(self, gray_screenshot, templates):
         """检测是否已经在游戏中"""
-        # 检查是否检测到"决斗"按钮
-        war_template = templates.get("war")
-        if war_template:
+        # “对战/决斗”(war) 属于局外入口，不能作为已进入对局的证据。
+        # 只接受换牌决定或双方回合标识等真正的战斗内元素。
+        for key in ("decision", "end_round", "enemy_round"):
+            template = templates.get(key)
+            if not template:
+                continue
             max_loc, max_val = self.template_manager.match_template(
-                gray_screenshot, war_template
+                gray_screenshot,
+                template,
             )
-            if max_val >= war_template["threshold"] and max_loc is not None:
-                return True
-
-        # 检查是否检测到"结束回合"按钮
-        end_round_template = templates.get("end_round")
-        if end_round_template:
-            max_loc, max_val = self.template_manager.match_template(
-                gray_screenshot, end_round_template
-            )
-            if max_val >= end_round_template["threshold"] and max_loc is not None:
-                return True
-
-        # 检查是否检测到"敌方回合"按钮
-        enemy_round_template = templates.get("enemy_round")
-        if enemy_round_template:
-            max_loc, max_val = self.template_manager.match_template(
-                gray_screenshot, enemy_round_template
-            )
-            if max_val >= enemy_round_template["threshold"] and max_loc is not None:
+            if max_val >= template["threshold"] and max_loc is not None:
                 return True
 
         return False

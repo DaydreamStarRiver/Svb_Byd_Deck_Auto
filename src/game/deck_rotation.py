@@ -1,4 +1,4 @@
-"""Result-screen deck rotation for the fixed 1280x720 game layout."""
+"""Battle-entry deck rotation for the fixed 1280x720 game layout."""
 
 from __future__ import annotations
 
@@ -21,6 +21,9 @@ from src.ui.deck_io import apply_strategy_config
 # 结算页“使用牌组”的卡组卡面中心。上方蓝色“确认”按钮只用于查看
 # 当前构筑详情，不会进入更换牌组弹窗，不能点它。
 RESULT_DECK_CARD = (839, 530)
+# 国际服“随机对战”大厅把使用牌组放在左侧；它会直接进入
+# 选择牌组网格，不像结算页那样先经过确认弹窗。
+BATTLE_LOBBY_DECK_CARD = (364, 500)
 DIALOG_DECK_BUTTON = (825, 370)
 DIALOG_DECIDE_BUTTON = (766, 553)
 DECK_GRID_POINTS = {
@@ -367,8 +370,15 @@ class DeckRotationController:
                 return False
         return False
 
-    def _wait_page(self, key: str, *, present: bool = True) -> bool:
-        deadline = time.monotonic() + self.timeout
+    def _wait_page(
+        self,
+        key: str,
+        *,
+        present: bool = True,
+        timeout: Optional[float] = None,
+    ) -> bool:
+        wait_seconds = self.timeout if timeout is None else max(0.25, float(timeout))
+        deadline = time.monotonic() + wait_seconds
         while time.monotonic() < deadline:
             self.device_state.check_interrupt()
             bgr, gray = self._capture()
@@ -379,15 +389,16 @@ class DeckRotationController:
             self.device_state.sleep(0.25)
         return False
 
-    def _wait_result_page(self) -> bool:
-        """等待卡组弹窗完全关闭，并确认已经稳定回到结算页。
+    def _wait_result_page(self, *, timeout: Optional[float] = None) -> bool:
+        """等待卡组弹窗完全关闭，并确认已回到可开始对战的页面。
 
         卡组弹窗使用半透明背景，弹窗仍存在时也可能匹配到后方结算页的
-        war/win/result。必须先排除两个卡组页面标识，再连续确认结算页，
+        war/win/result。必须先排除两个卡组页面标识，再连续确认入口页，
         否则状态机会复用旧截图过早点击“对战”。
         """
 
-        deadline = time.monotonic() + self.timeout
+        wait_seconds = self.timeout if timeout is None else max(0.25, float(timeout))
+        deadline = time.monotonic() + wait_seconds
         stable_frames = 0
         while time.monotonic() < deadline:
             self.device_state.check_interrupt()
@@ -410,21 +421,99 @@ class DeckRotationController:
             self.device_state.sleep(0.25)
         return False
 
+    def _detect_rotation_page(self, bgr: np.ndarray, gray: np.ndarray) -> str:
+        """Return the exact page in the deck-switch workflow."""
+
+        if self._matches("deck_confirm_dialog", bgr, gray):
+            return "confirm"
+        if self._matches("deck_selection_page", bgr, gray):
+            return "selection"
+        if self._matches("war", bgr, gray):
+            return "entry"
+        return "unknown"
+
+    def _current_rotation_page(self) -> str:
+        """Return the current page for guarded recovery navigation."""
+
+        bgr, gray = self._capture()
+        if bgr is None or gray is None:
+            return "unknown"
+        return self._detect_rotation_page(bgr, gray)
+
+    def _wait_rotation_workflow_page(self, *, timeout: float) -> str:
+        """Wait until either the confirmation dialog or deck grid is visible."""
+
+        deadline = time.monotonic() + max(0.25, float(timeout))
+        while time.monotonic() < deadline:
+            self.device_state.check_interrupt()
+            bgr, gray = self._capture()
+            if bgr is not None and gray is not None:
+                page = self._detect_rotation_page(bgr, gray)
+                if page in {"confirm", "selection"}:
+                    return page
+            self.device_state.sleep(0.25)
+        return "unknown"
+
+    def _open_deck_workflow(self) -> str:
+        """Open deck switching and return the page actually reached.
+
+        The settlement card first opens a confirmation dialog, while the
+        random-battle lobby card opens the deck grid directly.
+        """
+
+        bgr, gray = self._capture()
+        settlement_visible = bool(
+            bgr is not None
+            and gray is not None
+            and any(self._matches(key, bgr, gray) for key in ("win", "result"))
+        )
+        page_name, point = (
+            ("结算页", RESULT_DECK_CARD)
+            if settlement_visible
+            else ("随机对战大厅", BATTLE_LOBBY_DECK_CARD)
+        )
+        self.device_state.logger.info(
+            "[卡组轮换] 点击%s使用牌组卡面: %s",
+            page_name,
+            point,
+        )
+        self._click(point)
+        return self._wait_rotation_workflow_page(
+            timeout=max(1.5, min(6.0, self.timeout)),
+        )
+
     def _recover_result_page(self) -> bool:
-        """Best-effort back navigation before allowing continue/skip policies."""
+        """仅从已确认的卡组页面逐层返回，禁止在未知页面连续按返回键。"""
 
         device = self.device_state.require_u2_device()
-        for _ in range(2):
+        for attempt in range(2):
+            page = self._current_rotation_page()
+            if page == "entry":
+                self.device_state.logger.info(
+                    "[卡组轮换] 当前已位于对战入口，无需发送返回键"
+                )
+                return True
+            if page not in {"confirm", "selection"}:
+                self.device_state.logger.warning(
+                    "[卡组轮换] 恢复中止：当前页面不是卡组流程或对战入口，"
+                    "不会继续发送返回键"
+                )
+                return False
             try:
                 device.press("back")
             except Exception:
                 break
-            if self._wait_result_page():
+            self.device_state.logger.info(
+                "[卡组轮换] 已从卡组页面发送第 %d 次返回键",
+                attempt + 1,
+            )
+            self.device_state.sleep(0.6)
+            if self._wait_result_page(timeout=min(2.5, self.timeout)):
                 return True
         return False
 
     def perform_pending(self) -> bool:
-        """Execute the four-page transition; return whether next battle may start."""
+        """Execute the entry-specific deck workflow and synchronize its profile."""
 
         slot = self.pending_slot
         if slot is None:
@@ -463,15 +552,22 @@ class DeckRotationController:
 
         try:
             self._emit_status("switching")
-            self.device_state.logger.info("[卡组轮换] 点击使用牌组卡面，打开换牌组弹窗")
-            self._click(RESULT_DECK_CARD)
-            if not self._wait_page("deck_confirm_dialog"):
-                return self._handle_failure("未识别到确认牌组弹窗")
-
-            self.device_state.logger.info("[卡组轮换] 点击弹窗中的确认牌组按钮")
-            self._click(DIALOG_DECK_BUTTON)
-            if not self._wait_page("deck_selection_page"):
-                return self._handle_failure("未识别到选择牌组页面")
+            workflow_page = self._open_deck_workflow()
+            if workflow_page == "confirm":
+                self.device_state.logger.info(
+                    "[卡组轮换] 结算页入口已打开确认弹窗，点击确认牌组按钮"
+                )
+                self._click(DIALOG_DECK_BUTTON)
+                if not self._wait_page("deck_selection_page"):
+                    return self._handle_failure("未识别到选择牌组页面")
+            elif workflow_page == "selection":
+                self.device_state.logger.info(
+                    "[卡组轮换] 随机对战大厅已直接进入选择牌组页面"
+                )
+            else:
+                return self._handle_failure(
+                    "点击使用牌组后未识别到确认弹窗或选择牌组页面"
+                )
 
             self.device_state.logger.info("[卡组轮换] 点击卡组 %d: %s", slot, point)
             self._click(point)
@@ -562,7 +658,9 @@ class DeckRotationController:
             and (not needs_recovery or self._recover_result_page())
         ):
             if needs_recovery:
-                self.device_state.logger.warning("[卡组轮换] 已退回结算页，按失败策略继续")
+                self.device_state.logger.warning(
+                    "[卡组轮换] 已退回对战入口，按失败策略继续"
+                )
             else:
                 self.device_state.logger.warning("[卡组轮换] 未操作游戏页面，按失败策略继续")
             self._advance(success=False, skip=self.failure_policy == "skip")
